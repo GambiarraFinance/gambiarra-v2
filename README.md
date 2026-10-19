@@ -12,7 +12,8 @@ desenhada para agentes autônomos.
 
 > [!WARNING]
 > **Status: pré-deploy.** Nenhum contrato da v2 foi deployado, nenhum fundo real
-> está em risco e não há auditoria externa concluída. Os 13 testes Foundry passam,
+> está em risco e não há auditoria externa concluída. Os 17 testes Foundry
+> unitários (mais 16 fork tests) passam,
 > mas isso não é uma garantia de segurança. Nada aqui é conselho financeiro.
 
 ---
@@ -94,13 +95,19 @@ LP GAMB/WBNB ──► GambVault (ERC4626) ──► MasterChef pool 25 (legado,
 
 Já implementado e coberto por testes:
 
-- 13 testes Foundry (`GambTwapOracle` + `GambLendingPool`), incluindo:
+- 17 testes Foundry unitários (`GambTwapOracle` + `GambLendingPool`) e 16 fork
+  tests contra a BSC real (`GambLegacy` + `GambV2`), incluindo:
   - ataque de doação/inflação de shares;
   - borrow dentro e acima do LTV;
   - bloqueio de saque de colateral que quebra o LTV;
   - liquidação de posição subcolateralizada e rejeição de posição saudável;
-  - accrual de juros ao longo do tempo;
-  - TWAP stale, atualização cedo demais e fair value com reservas desbalanceadas.
+  - accrual de juros ao longo do tempo, inclusive quitação total com poeira de
+    arredondamento;
+  - TWAP stale, atualização cedo demais e fair value com reservas desbalanceadas;
+  - invariantes do MasterChef legado (owner renunciado, 3 GAMB/bloco, LP
+    duplicado nos pids 16 e 25);
+  - vault depositando/retirando do MasterChef real, harvest compondo e zap
+    abrindo posição alavancada em uma transação.
 - Limites duros em constantes: fee, LTV, threshold de liquidação, bônus e
   slippage.
 - `GambLeverageZap` deriva o teto de alavancagem do `maxLtvBps()` do pool.
@@ -189,6 +196,19 @@ A interface primária para agentes não é HTML:
 Todos são **somente leitura**. Nenhum endpoint assina transação, guarda chave
 privada ou movimenta fundos. O agente assina na própria wallet.
 
+### Material para agentes de código
+
+| Harness | Entrada |
+| --- | --- |
+| OpenCode, Codex, OpenClaw | [`AGENTS.md`](AGENTS.md) |
+| Claude Code | [`CLAUDE.md`](CLAUDE.md) → `AGENTS.md` |
+| Cursor | [`.cursor/rules/gambiarra.mdc`](.cursor/rules/gambiarra.mdc) |
+| Windsurf | [`.windsurfrules`](.windsurfrules) |
+| GitHub Copilot | [`.github/copilot-instructions.md`](.github/copilot-instructions.md) |
+
+O índice completo (incluindo a persona read-only do OpenClaw) está em
+[`agents/README.md`](agents/README.md). A fonte única é o `AGENTS.md` da raiz.
+
 ## Rodando localmente
 
 ### Contratos
@@ -200,6 +220,8 @@ cd contracts
 forge build
 forge test -vvv
 forge fmt --check
+make fork        # Anvil com fork da BSC (chain id 56), em outro terminal
+make fork-test   # invariantes do legado contra a BSC real (precisa de BSC_RPC_URL)
 ```
 
 Auditoria estática (Aderyn e Slither instalados localmente):
@@ -222,10 +244,14 @@ Requisitos: Node.js 22+.
 
 ```bash
 cd web
-npm ci
+npm install
 cp .env.example .env.local   # opcional
 npm run dev
 ```
+
+Em `next dev`, o app tenta primeiro o fork local da BSC em
+`http://127.0.0.1:8545` (chain id 56) e cai para RPC público se o Anvil não
+estiver rodando. Produção nunca usa o fork.
 
 Build de produção:
 
@@ -240,13 +266,17 @@ Variáveis de ambiente (todas opcionais):
 | Variável | Padrão | Uso |
 | --- | --- | --- |
 | `NEXT_PUBLIC_SITE_URL` | `https://gambiarra.finance` | canonical, sitemap, OG |
-| `BSC_RPC_URL` | RPCs públicos | leitura on-chain com fallback |
+| `BSC_RPC_URL` | RPCs públicos | leitura on-chain no servidor |
+| `BSC_FORK_RPC_URL` | `http://127.0.0.1:8545` | URL do fork em dev |
+| `USE_BSC_FORK` | habilitado em dev | `0` desativa o fork |
+| `NEXT_PUBLIC_RPC_URL` | RPC público | leitura no browser (`WalletPanel`) |
 
 ## Roadmap
 
 - [ ] Auditoria externa dos quatro contratos.
-- [ ] Testes de `GambVault` e `GambLeverageZap` com mocks.
-- [ ] Fork tests contra a BSC mainnet.
+- [ ] Testes unitários de `GambVault` e `GambLeverageZap` com mocks (hoje a
+      cobertura deles vem dos fork tests).
+- [x] Fork tests contra a BSC mainnet (`GambLegacy` + `GambV2`, gated por `BSC_RPC_URL`).
 - [ ] Deploy em testnet + dashboard lendo endereços reais.
 - [ ] x402 na BSC para rotas premium — **somente após** confirmar facilitator,
       stablecoin e contrato de pagamento.

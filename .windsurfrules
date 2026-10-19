@@ -1,0 +1,16 @@
+# Gambiarra Finance v2 — regras para agentes
+
+Leia `AGENTS.md` na raiz. É a fonte única de contexto.
+
+- Pré-deploy: não faça deploy em mainnet, não mova fundos reais.
+- MasterChef legado (`0x77c1…A550`) é imutável (`owner() == 0x0`); construa por cima.
+- LP GAMB/WBNB duplicado nos pools 16 e 25: sempre passe o `pid` (vault usa 25).
+- Solidity 0.8.26 exato, `evm_version = "paris"`, sem proxy/upgrade.
+- Saques do vault nunca pausáveis; TWAP falha fechado; liquidação permissionless.
+- Web: Next.js 16 (leia `web/node_modules/next/dist/docs/`), viem, `THREE.Timer`,
+  `<a>` para `/llms.txt`, `/agents.json` e `/api/stats`.
+- Números: `web/src/lib/format.ts` (bigint, half-up, pt-BR). Nunca `Number(bigint)`.
+- Fork dev: `next dev` tenta `127.0.0.1:8545` (chain 56); `USE_BSC_FORK=0` desativa.
+- Checks: `forge fmt --check && forge test -vvv`; `npm run lint && npm run build`.
+- Commits: autor `codingsh <codingsh@pm.me>`, sem coautoria.
+- Nunca edite `contracts/lib/` nem o contrato legado.

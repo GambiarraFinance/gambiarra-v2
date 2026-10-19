@@ -1,0 +1,26 @@
+---
+description: Gambiarra Finance v2 — contratos BSC (Solidity/Foundry) e web agent-first (Next.js 16 + viem)
+globs: ["contracts/**/*.sol", "contracts/**/*.toml", "web/**/*.ts", "web/**/*.tsx"]
+alwaysApply: true
+---
+
+# Gambiarra Finance v2
+
+Leia `AGENTS.md` na raiz. Fonte única de contexto. Regras que não podem quebrar:
+
+- **Pré-deploy.** Nada da v2 está em mainnet; não faça deploy real nem mova fundos.
+- **MasterChef legado é imutável** (`owner() == 0x0`). Não tente alterá-lo.
+- **LP GAMB/WBNB nos pools 16 e 25.** Sempre passe `pid` explicitamente (vault = 25).
+- **Solidity:** `0.8.26` exato, `evm_version = "paris"`, sem proxy/upgrade.
+  Saques do `GambVault` nunca pausáveis; TWAP falha fechado; liquidação permissionless.
+- **LTV:** 40% default, 50% liquidation threshold; alavancagem derivada de `maxLtvBps()`.
+- **Web:** Next.js 16 — consulte `web/node_modules/next/dist/docs/` antes de mudar
+  convenções. Use viem (não ethers/web3), `THREE.Timer` (não `Clock`) e `<a>` para
+  rotas cruas (`/llms.txt`, `/agents.json`, `/api/stats`).
+- **Números:** `web/src/lib/format.ts` (bigint, half-up, pt-BR). Nunca `Number(bigint)`.
+- **Fork dev:** `next dev` tenta `http://127.0.0.1:8545` (chain 56) antes do RPC público.
+  `USE_BSC_FORK=0` desativa. `make fork` em `contracts/`.
+- **Checks:** `forge fmt --check && forge test -vvv`; `npm run lint && npm run build`.
+- **Commits:** autor `codingsh <codingsh@pm.me>`, sem `Co-authored-by`.
+
+Não edite `contracts/lib/` nem o contrato legado. Não commite `.env` ou chaves.
