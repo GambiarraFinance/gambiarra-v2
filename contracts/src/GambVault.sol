@@ -78,7 +78,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     event SlippageUpdated(uint256 newSlippageBps);
     event DepositsPausedSet(bool paused);
     event EmergencyExit(uint256 lpRecovered);
-    event EmergencyRewardsRecovered(uint256 gambRecovered);
+    event EmergencyRewardsRecovered(uint256 gambRecovered, uint256 lpCompounded);
     event RescuedToken(address indexed token, uint256 amount, address indexed to);
 
     // ---------------------------------------------------------------------
@@ -332,15 +332,16 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     ///      is broken too, the attempt is rolled back atomically and the
     ///      rescue still goes through, because the rescue is the path of last
     ///      resort and must not be blocked by a broken swap.
-    function emergencyExitMasterChef() external onlyOwner nonReentrant {
+    function emergencyExitMasterChef() external nonReentrant onlyOwner {
         if (emergencyExited) revert AlreadyExited();
 
         try masterChef.deposit(pid, 0) {
             uint256 collected = gamb.balanceOf(address(this));
+            uint256 compounded = 0;
             if (collected >= 2) {
-                _swapAndAddLiquidity(collected, block.timestamp);
+                compounded = _swapAndAddLiquidity(collected, block.timestamp);
             }
-            emit EmergencyRewardsRecovered(collected);
+            emit EmergencyRewardsRecovered(collected, compounded);
         } catch {
             // The MasterChef could not pay out, or the router could not
             // compound the rewards. Either way there is nothing to recover and
