@@ -134,6 +134,8 @@ export async function GET() {
       serverHoldsPrivateKeys: false,
       maxLtvBps: 4000,
       liquidationThresholdBps: 5000,
+      maxCloseFactorBps: 5000,
+      maxLiquidationBonusBps: 1500,
       withdrawalsPausable: false,
       depositsPausable: true,
       upgradeable: false,
