@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IPancakeFlashPair} from "./interfaces/IPancakeFlashPair.sol";
 import {IPancakeCallee} from "./interfaces/IPancakeCallee.sol";
+import {IPancakePair} from "./interfaces/IPancakePair.sol";
 import {IPancakeRouter02} from "./interfaces/IPancakeRouter02.sol";
 import {IGambVault} from "./interfaces/IGambVault.sol";
 import {GambLendingPool} from "./GambLendingPool.sol";
@@ -52,7 +54,17 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
     }
 
     uint256 public constant MAX_BPS = 10_000;
-    uint256 public constant MAX_LEVERAGE_BPS = 30_000; // hard cap: 3x
+    uint256 public constant WAD = 1e18;
+    /// @notice Absolute ceiling on leverage, as a belt-and-braces upper bound.
+    /// @dev The binding limit is derived from the lending pool's current max LTV
+    ///      (see `_maxUsableLeverageBps`). A 3x position against a 40% LTV pool
+    ///      would revert with `ExceedsLtv`, so the real reachable leverage is
+    ///      always the LTV-derived value, which is the smaller of the two.
+    uint256 public constant MAX_LEVERAGE_BPS = 30_000; // 3x absolute ceiling
+    /// @notice Safety margin kept below the LTV-derived leverage cap so normal
+    ///         swap/liquidity-provision slippage cannot push the fresh position
+    ///         straight through the pool's LTV check.
+    uint256 public constant LEVERAGE_MARGIN_BPS = 1_000; // 10%
     uint256 public constant MIN_SLIPPAGE_BPS = 50;
     uint256 public constant MAX_SLIPPAGE_BPS = 500;
     // PancakeSwap V2 swap fee is 0.25%: repaying a flash swap of `amountOut`
@@ -63,6 +75,9 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
     IERC20 public immutable wbnb;
     IERC20 public immutable gamb;
     IERC20 public immutable lpToken;
+    /// @notice The LP token seen as the Pancake pair it is, so the zap can
+    ///         read its reserves to build non-zero `removeLiquidity` minimums.
+    IPancakePair public immutable lpPair;
     IPancakeRouter02 public immutable router;
     IGambVault public immutable vault;
     GambLendingPool public immutable lendingPool;
@@ -78,10 +93,18 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
     uint256 public swapSlippageBps = 150; // 1.5%
     bool public openingPaused;
 
-    event OpenedPosition(address indexed user, uint256 principalWbnb, uint256 totalDeployed, uint256 lpMinted, uint256 vaultSharesMinted, uint256 debtWbnb);
+    event OpenedPosition(
+        address indexed user,
+        uint256 principalWbnb,
+        uint256 totalDeployed,
+        uint256 lpMinted,
+        uint256 vaultSharesMinted,
+        uint256 debtWbnb
+    );
     event ClosedPosition(address indexed user, uint256 lpRedeemed, uint256 gambFromLp, uint256 wbnbReturnedToUser);
     event SlippageUpdated(uint256 newSlippageBps);
     event OpeningPausedSet(bool paused);
+    event RescuedToken(address indexed token, uint256 amount, address indexed to);
 
     error OpeningIsPaused();
     error BadLeverage();
@@ -89,6 +112,13 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
     error BadFlashSender();
     error SlippageExceeded();
     error NoPosition();
+    error ZeroAmount();
+    error ZeroAddress();
+    error EmptyPool();
+    error InsufficientToClose();
+    error PositionNotFullyRepaid();
+    error CannotRescueProtocolAsset();
+    error DeadlineExpired();
 
     constructor(
         IERC20 wbnb_,
@@ -103,6 +133,7 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
         wbnb = wbnb_;
         gamb = gamb_;
         lpToken = lpToken_;
+        lpPair = IPancakePair(address(lpToken_));
         router = router_;
         vault = vault_;
         lendingPool = lendingPool_;
@@ -122,7 +153,9 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
         nonReentrant
     {
         if (openingPaused) revert OpeningIsPaused();
-        if (leverageBps <= MAX_BPS || leverageBps > MAX_LEVERAGE_BPS) revert BadLeverage();
+        if (leverageBps <= MAX_BPS || leverageBps > _maxUsableLeverageBps()) revert BadLeverage();
+        if (principalWbnb == 0) revert ZeroAmount();
+        if (deadline < block.timestamp) revert DeadlineExpired();
 
         wbnb.safeTransferFrom(msg.sender, address(this), principalWbnb);
 
@@ -134,6 +167,7 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
     }
 
     function closeLeveragedPosition(uint256 minWbnbOut, uint256 deadline) external nonReentrant {
+        if (deadline < block.timestamp) revert DeadlineExpired();
         (,, uint256 shares) = lendingPool.borrowers(msg.sender);
         if (shares == 0) revert NoPosition();
 
@@ -154,6 +188,21 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
     // ---------------------------------------------------------------------
     // Flash swap plumbing
     // ---------------------------------------------------------------------
+
+    /// @notice Largest leverage whose debt/collateral ratio stays inside the
+    ///         lending pool's max LTV, with a safety margin applied.
+    /// @dev From `(L - 1) / L = ltv`, the exact break-even leverage is
+    ///      `L = 1 / (1 - ltv)`. Since the pool's LTV is mutable by its owner,
+    ///      this is read at call time instead of hardcoded; the absolute
+    ///      `MAX_LEVERAGE_BPS` ceiling still applies on top.
+    function _maxUsableLeverageBps() internal view returns (uint256) {
+        uint256 ltvBps = lendingPool.maxLtvBps();
+        if (ltvBps >= MAX_BPS) return MAX_BPS;
+
+        uint256 derived = Math.mulDiv(MAX_BPS, MAX_BPS, MAX_BPS - ltvBps);
+        uint256 withMargin = Math.mulDiv(derived, MAX_BPS - LEVERAGE_MARGIN_BPS, MAX_BPS);
+        return withMargin < MAX_LEVERAGE_BPS ? withMargin : MAX_LEVERAGE_BPS;
+    }
 
     function _initiateFlash(uint256 wbnbAmount, bytes memory data) internal {
         (uint256 amount0Out, uint256 amount1Out) =
@@ -226,34 +275,91 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
 
     function _handleClose(uint256 borrowedWbnb, CloseParams memory p) internal {
         wbnb.forceApprove(address(lendingPool), borrowedWbnb);
-        lendingPool.repay(borrowedWbnb, p.user);
+        uint256 actualRepaid = lendingPool.repay(borrowedWbnb, p.user);
+
+        // Post-condition: the position must be fully closed. `repay` pulls at
+        // most the outstanding debt, so it can come back short of what we
+        // asked for. A shortfall means the debt was SMALLER than the flash
+        // buffer — harmless, the surplus stays in the zap and is handed back
+        // to the user as leftover. The case that must fail loudly is the
+        // opposite one: we paid the full buffer and debt still survived,
+        // because interest moved between the snapshot in
+        // `closeLeveragedPosition` and this callback. The old code ignored
+        // `repay`'s return value entirely and closed with a live debt.
+        if (actualRepaid == borrowedWbnb && lendingPool.currentDebt(p.user) != 0) revert PositionNotFullyRepaid();
 
         (,, uint256 shares) = lendingPool.borrowers(p.user);
         lendingPool.withdrawCollateral(shares, p.user, address(this));
 
         uint256 lpAmount = vault.redeem(shares, address(this), address(this));
 
+        // Non-zero minimums for the LP redemption, derived from the pair's
+        // proportional reserve split. This used to pass `0, 0`, which let a
+        // sandwich pick the GAMB/WBNB split of the redemption — and the
+        // follow-up swap then executed against exactly that skewed pool.
+        (uint256 expectedGamb, uint256 expectedWbnb) = _expectedLpSplit(lpAmount);
+
+        uint256 wbnbBeforeClose = wbnb.balanceOf(address(this));
+
         lpToken.forceApprove(address(router), lpAmount);
-        (uint256 gambOut,) = router.removeLiquidity(address(gamb), address(wbnb), lpAmount, 0, 0, address(this), p.deadline);
+        (uint256 gambOut, uint256 wbnbOut) = router.removeLiquidity(
+            address(gamb),
+            address(wbnb),
+            lpAmount,
+            _applySlippage(expectedGamb),
+            _applySlippage(expectedWbnb),
+            address(this),
+            p.deadline
+        );
 
         address[] memory path = new address[](2);
         path[0] = address(gamb);
         path[1] = address(wbnb);
         uint256 wbnbMinOutFromGamb = _applySlippage(_quoteOut(gambOut, path));
+
+        uint256 wbnbBeforeSwap = wbnb.balanceOf(address(this));
         gamb.forceApprove(address(router), gambOut);
-        router.swapExactTokensForTokensSupportingFeeOnTransferTokens(gambOut, wbnbMinOutFromGamb, path, address(this), p.deadline);
+        router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            gambOut, wbnbMinOutFromGamb, path, address(this), p.deadline
+        );
+        uint256 wbnbFromSwap = wbnb.balanceOf(address(this)) - wbnbBeforeSwap;
 
-        uint256 currentWbnbBal = wbnb.balanceOf(address(this));
+        // Everything this close produced: the WBNB leg of the LP redemption,
+        // the WBNB bought with the GAMB leg, and any WBNB the zap already
+        // held (normally zero; the flash principal was consumed by the
+        // repay above, and only the over-borrowed buffer can remain).
+        uint256 wbnbAvailable = wbnbBeforeClose + wbnbOut + wbnbFromSwap;
+
         uint256 repayRequired = _flashRepayAmount(borrowedWbnb);
-        require(currentWbnbBal >= repayRequired, "insufficient to close");
+        if (wbnbAvailable < repayRequired) revert InsufficientToClose();
 
-        uint256 leftover = currentWbnbBal - repayRequired;
+        uint256 leftover = wbnbAvailable - repayRequired;
         if (leftover < p.minWbnbOut) revert SlippageExceeded();
 
         wbnb.safeTransfer(address(flashPair), repayRequired);
         if (leftover > 0) wbnb.safeTransfer(p.user, leftover);
 
         emit ClosedPosition(p.user, lpAmount, gambOut, leftover);
+    }
+
+    /// @notice Proportional split of `lpAmount` into its GAMB and WBNB legs,
+    ///         measured against the pair's current reserves.
+    /// @dev Used to build non-zero `removeLiquidity` minimums. The reserve
+    ///      ratio is itself manipulable, which is exactly the point: a
+    ///      sandwich that skews the reserves past the slippage tolerance
+    ///      makes the removal revert, instead of quietly handing the
+    ///      attacker a better GAMB/WBNB split than the LP is worth.
+    function _expectedLpSplit(uint256 lpAmount) internal view returns (uint256 expectedGamb, uint256 expectedWbnb) {
+        (uint112 r0, uint112 r1,) = lpPair.getReserves();
+        uint256 supply = lpPair.totalSupply();
+        if (supply == 0) revert EmptyPool();
+
+        bool gambIsToken0 = lpPair.token0() == address(gamb);
+        uint256 gambReserve = gambIsToken0 ? uint256(r0) : uint256(r1);
+        uint256 wbnbReserve = gambIsToken0 ? uint256(r1) : uint256(r0);
+
+        expectedGamb = Math.mulDiv(lpAmount, gambReserve, supply);
+        expectedWbnb = Math.mulDiv(lpAmount, wbnbReserve, supply);
     }
 
     function _quoteOut(uint256 amountIn, address[] memory path) internal view returns (uint256) {
@@ -281,7 +387,15 @@ contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
         emit OpeningPausedSet(paused_);
     }
 
+    /// @notice Sweep any token accidentally sent to this zap. Can never touch
+    ///         the protocol's own assets: the LP token, the vault shares, or
+    ///         the two tokens the zap transacts in.
     function rescueToken(address token, uint256 amount, address to) external onlyOwner {
+        if (token == address(lpToken) || token == address(vault) || token == address(wbnb) || token == address(gamb)) {
+            revert CannotRescueProtocolAsset();
+        }
+        if (to == address(0)) revert ZeroAddress();
         IERC20(token).safeTransfer(to, amount);
+        emit RescuedToken(token, amount, to);
     }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 /// @notice PancakeSwap V2 pair surface needed for TWAP reads and flash swaps.
 interface IPancakeFlashPair {

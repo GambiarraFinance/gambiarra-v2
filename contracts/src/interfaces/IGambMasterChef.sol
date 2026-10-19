@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 /// @title IGambMasterChef
 /// @notice Minimal interface for the legacy, ownership-renounced Gambiarra Finance
@@ -22,7 +22,10 @@ interface IGambMasterChef {
         uint256 rewardDebt;
     }
 
-    function poolInfo(uint256 pid) external view returns (address lpToken, uint256 allocPoint, uint256 lastRewardBlock, uint256 accGambPerShare);
+    function poolInfo(uint256 pid)
+        external
+        view
+        returns (address lpToken, uint256 allocPoint, uint256 lastRewardBlock, uint256 accGambPerShare);
 
     function userInfo(uint256 pid, address user) external view returns (uint256 amount, uint256 rewardDebt);
 

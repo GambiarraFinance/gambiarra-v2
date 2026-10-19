@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IPancakeFlashPair} from "./interfaces/IPancakeFlashPair.sol";
+import {IGambTwapOracle} from "./interfaces/IGambTwapOracle.sol";
 
 /// @title GambTwapOracle
 /// @notice Permissionless TWAP price oracle for the GAMB/WBNB PancakeSwap V2
@@ -19,9 +20,10 @@ import {IPancakeFlashPair} from "./interfaces/IPancakeFlashPair.sol";
 ///      Consumers MUST treat a stale price as "unavailable", never fall back
 ///      to spot — see `gambPriceInWbnbWad`, which reverts rather than
 ///      returning a guess. Fail closed, not open.
-contract GambTwapOracle {
+contract GambTwapOracle is IGambTwapOracle {
     uint256 public constant MIN_PERIOD = 30 minutes;
     uint256 public constant MAX_STALENESS = 2 hours;
+    uint256 public constant WAD = 1e18;
     uint256 private constant Q112 = 2 ** 112;
 
     IPancakeFlashPair public immutable pair;
@@ -37,6 +39,10 @@ contract GambTwapOracle {
     error NoElapsedTime();
     error OracleStale();
     error PairAssetMismatch();
+
+    /// @notice Emitted on every successful `update()`. Without this, off-chain
+    ///         indexers and agents had no way to know the TWAP window moved.
+    event PriceUpdated(uint256 priceAverageWad, uint32 blockTimestampLast);
 
     constructor(IPancakeFlashPair pair_, address gamb_, address wbnb_) {
         bool isToken0 = pair_.token0() == gamb_;
@@ -68,12 +74,16 @@ contract GambTwapOracle {
             // priceCumulative is a UQ112x112 fixed-point accumulator. Divide
             // the delta by elapsed time to get the Q112-scaled time-average,
             // then rescale from Q112 to 1e18 ("WAD") fixed point.
+            // Math.mulDiv does the rescale with a 512-bit intermediate, so the
+            // Q112 accumulator can never overflow the way `* 1e18` would.
             uint256 priceAverageQ112 = (priceCumulative - priceCumulativeLast) / timeElapsed;
-            priceAverageWad = (priceAverageQ112 * 1e18) / Q112;
+            priceAverageWad = Math.mulDiv(priceAverageQ112, WAD, Q112);
         }
 
         priceCumulativeLast = priceCumulative;
         blockTimestampLast = blockTimestamp;
+
+        emit PriceUpdated(priceAverageWad, blockTimestamp);
     }
 
     function isStale() public view returns (bool) {
@@ -107,8 +117,8 @@ contract GambTwapOracle {
         uint256 totalSupply = pair.totalSupply();
         if (totalSupply == 0 || lpAmount == 0) return 0;
 
-        uint256 px0 = gambIsToken0 ? priceGambWad : 1e18;
-        uint256 px1 = gambIsToken0 ? 1e18 : priceGambWad;
+        uint256 px0 = gambIsToken0 ? priceGambWad : WAD;
+        uint256 px1 = gambIsToken0 ? WAD : priceGambWad;
 
         uint256 sqrtK = Math.sqrt(uint256(r0) * uint256(r1));
         uint256 sqrtPx = Math.sqrt(px0 * px1);
@@ -121,6 +131,6 @@ contract GambTwapOracle {
         // Math.mulDiv does the (totalValueWad * lpAmount) step with 512-bit
         // intermediate precision, so this neither overflows nor loses
         // precision the way `(totalValueWad / totalSupply) * lpAmount` would.
-        valueInWbnb = Math.mulDiv(totalValueWad, lpAmount, totalSupply) / 1e18;
+        valueInWbnb = Math.mulDiv(totalValueWad, lpAmount, totalSupply) / WAD;
     }
 }

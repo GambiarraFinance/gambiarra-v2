@@ -1,0 +1,69 @@
+'forge clean' running (wd: /Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts)
+'forge config --json' running
+'forge build --build-info --skip ./test/** ./script/** --force' running (wd: /Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts)
+INFO:Detectors:
+GambLendingPool._ratePerSecond(uint256,uint256) (src/GambLendingPool.sol#175-180) uses a dangerous strict equality:
+	- pool == 0 (src/GambLendingPool.sol#177)
+GambLendingPool.accrueInterest() (src/GambLendingPool.sol#149-173) uses a dangerous strict equality:
+	- elapsed == 0 (src/GambLendingPool.sol#151)
+GambVault._stakeIdleBalance() (src/GambVault.sol#171-176) uses a dangerous strict equality:
+	- idle == 0 (src/GambVault.sol#173)
+GambVault.harvest(uint256,uint256) (src/GambVault.sol#193-259) uses a dangerous strict equality:
+	- gambBalance == 0 (src/GambVault.sol#201)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities
+INFO:Detectors:
+GambLeverageZap.closeLeveragedPosition(uint256,uint256) (src/GambLeverageZap.sol#169-186) ignores return value by (None,None,shares) = lendingPool.borrowers(msg.sender) (src/GambLeverageZap.sol#171)
+GambLeverageZap._handleOpen(uint256,GambLeverageZap.OpenParams) (src/GambLeverageZap.sol#233-274) ignores return value by (None,None,liquidity) = router.addLiquidity(address(gamb),address(wbnb),gambReceived,otherHalf,_applySlippage(gambReceived),_applySlippage(otherHalf),address(this),p.deadline) (src/GambLeverageZap.sol#250-259)
+GambLeverageZap._handleClose(uint256,GambLeverageZap.CloseParams) (src/GambLeverageZap.sol#276-343) ignores return value by (None,None,shares) = lendingPool.borrowers(p.user) (src/GambLeverageZap.sol#291)
+GambLeverageZap._expectedLpSplit(uint256) (src/GambLeverageZap.sol#352-363) ignores return value by (r0,r1,None) = lpPair.getReserves() (src/GambLeverageZap.sol#353)
+GambTwapOracle.constructor(IPancakeFlashPair,address,address) (src/GambTwapOracle.sol#47-61) ignores return value by (None,None,ts) = pair_.getReserves() (src/GambTwapOracle.sol#59)
+GambTwapOracle.update() (src/GambTwapOracle.sol#65-87) ignores return value by (None,None,blockTimestamp) = pair.getReserves() (src/GambTwapOracle.sol#67)
+GambTwapOracle.isStale() (src/GambTwapOracle.sol#89-94) ignores return value by (None,None,currentTs) = pair.getReserves() (src/GambTwapOracle.sol#90)
+GambTwapOracle.fairValueOfLpInWbnb(uint256) (src/GambTwapOracle.sol#114-135) ignores return value by (r0,r1,None) = pair.getReserves() (src/GambTwapOracle.sol#116)
+GambVault.constructor(IERC20,IGambMasterChef,uint256,IERC20,IERC20,IPancakeRouter02,address,address) (src/GambVault.sol#94-117) ignores return value by (lpToken,None,None,None) = masterChef_.poolInfo(pid_) (src/GambVault.sol#108)
+GambVault.totalAssets() (src/GambVault.sol#133-136) ignores return value by (staked,None) = masterChef.userInfo(pid,address(this)) (src/GambVault.sol#134)
+GambVault.harvest(uint256,uint256) (src/GambVault.sol#193-259) ignores return value by (None,None,liquidity) = router.addLiquidity(address(gamb),address(wbnb),gambForLp,wbnbReceived,_applySlippage(gambForLp),_applySlippage(wbnbReceived),address(this),deadline) (src/GambVault.sol#242-251)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#unused-return
+INFO:Detectors:
+Reentrancy in GambLeverageZap._handleClose(uint256,GambLeverageZap.CloseParams) (src/GambLeverageZap.sol#276-343):
+	External calls:
+	- actualRepaid = lendingPool.repay(borrowedWbnb,p.user) (src/GambLeverageZap.sol#278)
+	- lendingPool.withdrawCollateral(shares,p.user,address(this)) (src/GambLeverageZap.sol#292)
+	- lpAmount = vault.redeem(shares,address(this),address(this)) (src/GambLeverageZap.sol#294)
+	- (gambOut,wbnbOut) = router.removeLiquidity(address(gamb),address(wbnb),lpAmount,_applySlippage(expectedGamb),_applySlippage(expectedWbnb),address(this),p.deadline) (src/GambLeverageZap.sol#305-313)
+	- router.swapExactTokensForTokensSupportingFeeOnTransferTokens(gambOut,wbnbMinOutFromGamb,path,address(this),p.deadline) (src/GambLeverageZap.sol#322-324)
+	Event emitted after the call(s):
+	- ClosedPosition(p.user,lpAmount,gambOut,leftover) (src/GambLeverageZap.sol#342)
+Reentrancy in GambLeverageZap._handleOpen(uint256,GambLeverageZap.OpenParams) (src/GambLeverageZap.sol#233-274):
+	External calls:
+	- router.swapExactTokensForTokensSupportingFeeOnTransferTokens(half,gambMinOut,path,address(this),p.deadline) (src/GambLeverageZap.sol#245)
+	- (None,None,liquidity) = router.addLiquidity(address(gamb),address(wbnb),gambReceived,otherHalf,_applySlippage(gambReceived),_applySlippage(otherHalf),address(this),p.deadline) (src/GambLeverageZap.sol#250-259)
+	- sharesMinted = vault.deposit(liquidity,address(this)) (src/GambLeverageZap.sol#263)
+	- lendingPool.depositCollateral(sharesMinted,p.user) (src/GambLeverageZap.sol#266)
+	- lendingPool.borrow(repayAmount,p.user,address(this)) (src/GambLeverageZap.sol#269)
+	Event emitted after the call(s):
+	- OpenedPosition(p.user,p.principalWbnb,totalWbnb,liquidity,sharesMinted,repayAmount) (src/GambLeverageZap.sol#273)
+Reentrancy in GambVault.emergencyExitMasterChef() (src/GambVault.sol#313-320):
+	External calls:
+	- masterChef.emergencyWithdraw(pid) (src/GambVault.sol#317)
+	Event emitted after the call(s):
+	- EmergencyExit(recovered) (src/GambVault.sol#319)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-3
+INFO:Detectors:
+GambLendingPool.accrueInterest() (src/GambLendingPool.sol#149-173) uses timestamp for comparisons
+	Dangerous comparisons:
+	- elapsed == 0 (src/GambLendingPool.sol#151)
+GambLendingPool.withdrawReserves(uint256,address) (src/GambLendingPool.sol#405-414) uses timestamp for comparisons
+	Dangerous comparisons:
+	- amount > totalReserves (src/GambLendingPool.sol#409)
+GambLeverageZap.openLeveragedPosition(uint256,uint256,uint256,uint256) (src/GambLeverageZap.sol#151-167) uses timestamp for comparisons
+	Dangerous comparisons:
+	- deadline < block.timestamp (src/GambLeverageZap.sol#158)
+GambLeverageZap.closeLeveragedPosition(uint256,uint256) (src/GambLeverageZap.sol#169-186) uses timestamp for comparisons
+	Dangerous comparisons:
+	- deadline < block.timestamp (src/GambLeverageZap.sol#170)
+GambVault.harvest(uint256,uint256) (src/GambVault.sol#193-259) uses timestamp for comparisons
+	Dangerous comparisons:
+	- deadline < block.timestamp (src/GambVault.sol#195)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Slither:. analyzed (30 contracts with 100 detectors), 23 result(s) found

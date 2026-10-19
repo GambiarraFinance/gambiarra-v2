@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -49,6 +49,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     // ---------------------------------------------------------------------
 
     uint256 public constant MAX_BPS = 10_000;
+    uint256 public constant WAD = 1e18;
     uint256 public constant MAX_FEE_BPS = 1_000; // hard cap: fee can never exceed 10%
     uint256 public constant MAX_CALLER_INCENTIVE_BPS = 100; // hard cap: 1%
     uint256 public constant MIN_SLIPPAGE_BPS = 50; // floor: never allow < 0.5% slippage tolerance
@@ -66,7 +67,9 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     // Events
     // ---------------------------------------------------------------------
 
-    event Harvested(address indexed caller, uint256 gambHarvested, uint256 feeAmount, uint256 callerReward, uint256 lpCompounded);
+    event Harvested(
+        address indexed caller, uint256 gambHarvested, uint256 feeAmount, uint256 callerReward, uint256 lpCompounded
+    );
     event FeeRecipientUpdated(address indexed newRecipient);
     event PerformanceFeeUpdated(uint256 newFeeBps);
     event CallerIncentiveUpdated(uint256 newIncentiveBps);
@@ -85,7 +88,8 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     error CannotRescueVaultAsset();
     error ZeroAddress();
     error AlreadyExited();
-    error NotExited();
+    error SlippageExceeded();
+    error DeadlineExpired();
 
     constructor(
         IERC20 lpAsset,
@@ -96,11 +100,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
         IPancakeRouter02 router_,
         address initialOwner,
         address initialFeeRecipient
-    )
-        ERC20("Gambiarra Auto-Compounding GAMB/WBNB", "agGAMB-WBNB")
-        ERC4626(lpAsset)
-        Ownable(initialOwner)
-    {
+    ) ERC20("Gambiarra Auto-Compounding GAMB/WBNB", "agGAMB-WBNB") ERC4626(lpAsset) Ownable(initialOwner) {
         if (initialFeeRecipient == address(0)) revert ZeroAddress();
 
         // Sanity-check the pool id actually points at this LP token. This is
@@ -145,7 +145,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
 
     /// @dev Unstake exactly what's needed from MasterChef before handing it
     ///      out, so the base ERC4626 transfer always has the balance it expects.
-    function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
+    function _withdraw(address caller, address receiver, address owner_, uint256 assets, uint256 shares)
         internal
         override
         nonReentrant
@@ -154,7 +154,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
         if (idle < assets && !emergencyExited) {
             masterChef.withdraw(pid, assets - idle);
         }
-        super._withdraw(caller, receiver, owner, assets, shares);
+        super._withdraw(caller, receiver, owner_, assets, shares);
     }
 
     /// @notice Deposits are pausable (owner can stop new inflows if something
@@ -183,8 +183,16 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     ///         and caller incentive, swaps the remainder into GAMB/WBNB LP,
     ///         and restakes it. Anyone (a bot, a cron job, another agent) can
     ///         call this — that's the point: no human needs to babysit it.
-    function harvest(uint256 minLpOut) external nonReentrant returns (uint256 lpCompounded) {
+    /// @param minLpOut Minimum LP tokens the caller accepts from the compound
+    ///        leg. Reverts if fewer are minted.
+    /// @param deadline Unix timestamp past which the swap/compound must not
+    ///        execute. A caller-supplied deadline — instead of `block.timestamp`
+    ///        — is what actually bounds how long a pending transaction may sit
+    ///        in the mempool before landing at a stale price: a proposer cannot
+    ///        defer it past this point.
+    function harvest(uint256 minLpOut, uint256 deadline) external nonReentrant returns (uint256 lpCompounded) {
         if (emergencyExited) revert AlreadyExited();
+        if (deadline < block.timestamp) revert DeadlineExpired();
 
         // deposit(pid, 0) is the standard MasterChef idiom for "just harvest".
         masterChef.deposit(pid, 0);
@@ -198,7 +206,16 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
 
         if (feeAmount > 0) gamb.safeTransfer(feeRecipient, feeAmount);
         if (callerReward > 0) gamb.safeTransfer(msg.sender, callerReward);
-        if (toCompound == 0) return 0;
+
+        // A compound leg needs at least 2 GAMB to split into two non-zero
+        // legs. With less, the router reverts on a zero-amount swap and
+        // harvest() stays bricked for good. The remainder just stays in the
+        // vault and is picked up by the next harvest, which compounds the
+        // vault's whole GAMB balance.
+        if (toCompound < 2) {
+            emit Harvested(msg.sender, gambBalance, feeAmount, callerReward, 0);
+            return 0;
+        }
 
         uint256 half = toCompound / 2;
         uint256 otherHalf = toCompound - half;
@@ -211,9 +228,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
 
         gamb.forceApprove(address(router), half);
         uint256 wbnbBefore = wbnb.balanceOf(address(this));
-        router.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-            half, wbnbMinOut, path, address(this), block.timestamp
-        );
+        router.swapExactTokensForTokensSupportingFeeOnTransferTokens(half, wbnbMinOut, path, address(this), deadline);
         uint256 wbnbReceived = wbnb.balanceOf(address(this)) - wbnbBefore;
 
         // Re-check actual GAMB balance (defensive against fee-on-transfer
@@ -232,10 +247,10 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
             _applySlippage(gambForLp),
             _applySlippage(wbnbReceived),
             address(this),
-            block.timestamp
+            deadline
         );
 
-        require(liquidity >= minLpOut, "slippage: lp out");
+        if (liquidity < minLpOut) revert SlippageExceeded();
 
         _stakeIdleBalance();
         lpCompounded = liquidity;
@@ -305,9 +320,11 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Sweep any token accidentally sent to this vault. Can never
-    ///         touch the vault's own backing LP asset.
+    ///         touch the vault's own backing LP asset, the GAMB reward token
+    ///         (pending rewards belong to depositors and anyone can collect
+    ///         them via harvest()), or the vault's own share token.
     function rescueToken(address token, uint256 amount, address to) external onlyOwner {
-        if (token == asset()) revert CannotRescueVaultAsset();
+        if (token == asset() || token == address(gamb) || token == address(this)) revert CannotRescueVaultAsset();
         if (to == address(0)) revert ZeroAddress();
         IERC20(token).safeTransfer(to, amount);
         emit RescuedToken(token, amount, to);

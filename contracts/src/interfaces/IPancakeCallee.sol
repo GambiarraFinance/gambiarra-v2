@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 /// @notice Callback interface a PancakeSwap V2 flash-swap caller must implement.
 interface IPancakeCallee {

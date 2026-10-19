@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IGambTwapOracle} from "./interfaces/IGambTwapOracle.sol";
 import {IGambVault} from "./interfaces/IGambVault.sol";
@@ -30,11 +31,14 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     uint256 public constant MAX_BPS = 10_000;
+    uint256 public constant WAD = 1e18;
     uint256 public constant SECONDS_PER_YEAR = 365 days;
     uint256 public constant MAX_LIQUIDATION_THRESHOLD_BPS = 8_000; // hard cap 80%
     uint256 public constant MAX_RESERVE_FACTOR_BPS = 2_000; // hard cap 20%
     uint256 public constant MAX_LIQUIDATION_BONUS_BPS = 1_500; // hard cap 15%
     uint256 public constant LTV_SAFETY_BUFFER_BPS = 500; // maxLtv must stay >=5% below liq. threshold
+    /// @dev bps (1e4) -> wad-per-year (1e18): multiply by 1e14.
+    uint256 private constant BPS_TO_WAD_PER_YEAR = 1e14;
 
     // Virtual shares/assets offset, same inflation-attack guard idea as
     // GambVault's ERC4626 `_decimalsOffset()`. Without this, the very first
@@ -95,6 +99,13 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
     event ReservesWithdrawn(uint256 amount, address indexed to);
     event BorrowingPausedSet(bool paused);
 
+    /// @notice Emitted whenever interest is accrued onto the global borrow
+    ///         index. Without it, suppliers/agents had no on-chain signal that
+    ///         the debt grew — only a balance delta.
+    event InterestAccrued(
+        uint256 borrowIndex, uint256 totalBorrows, uint256 totalReserves, uint256 interestAccumulated
+    );
+
     error NotAuthorized();
     error BorrowingIsPaused();
     error InsufficientLiquidity();
@@ -102,13 +113,9 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
     error NotUndercollateralized();
     error RiskParamOutOfRange();
     error ZeroAddress();
+    error RateModelOutOfRange();
 
-    constructor(
-        IERC20 wbnb_,
-        IGambVault vault_,
-        IGambTwapOracle oracle_,
-        address initialOwner
-    ) Ownable(initialOwner) {
+    constructor(IERC20 wbnb_, IGambVault vault_, IGambTwapOracle oracle_, address initialOwner) Ownable(initialOwner) {
         wbnb = wbnb_;
         vault = vault_;
         collateralToken = IERC20(address(vault_));
@@ -147,22 +154,29 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         uint256 borrowsPrior = totalBorrows;
         uint256 rate = _ratePerSecond(cash, borrowsPrior);
 
+        uint256 interestAccumulated = 0;
         if (borrowsPrior > 0 && rate > 0) {
-            uint256 interestAccumulated = (borrowsPrior * rate * elapsed) / 1e18;
-            uint256 reservesDelta = (interestAccumulated * reserveFactorBps) / MAX_BPS;
+            // Math.mulDiv with a 512-bit intermediate: `borrowsPrior * rate *
+            // elapsed` is computed without ever overflowing, and the final
+            // division truncates exactly once (at the end) instead of at
+            // every step.
+            interestAccumulated = Math.mulDiv(Math.mulDiv(borrowsPrior, rate, WAD), elapsed, 1);
+            uint256 reservesDelta = Math.mulDiv(interestAccumulated, reserveFactorBps, MAX_BPS);
             totalBorrows = borrowsPrior + interestAccumulated;
             totalReserves += reservesDelta;
-            borrowIndex += (borrowIndex * rate * elapsed) / 1e18;
+            borrowIndex += Math.mulDiv(Math.mulDiv(borrowIndex, rate, WAD), elapsed, 1);
         }
 
         lastAccrualTimestamp = block.timestamp;
+
+        emit InterestAccrued(borrowIndex, totalBorrows, totalReserves, interestAccumulated);
     }
 
     function _ratePerSecond(uint256 cash, uint256 borrows) internal view returns (uint256) {
         uint256 pool = cash + borrows;
         if (pool == 0) return baseRatePerSecond;
-        uint256 utilizationWad = (borrows * 1e18) / pool;
-        return baseRatePerSecond + (utilizationWad * multiplierPerSecond) / 1e18;
+        uint256 utilizationWad = Math.mulDiv(borrows, WAD, pool);
+        return baseRatePerSecond + Math.mulDiv(utilizationWad, multiplierPerSecond, WAD);
     }
 
     function _currentDebt(BorrowerInfo storage info) internal view returns (uint256) {
@@ -295,14 +309,18 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         uint256 debt = _currentDebt(info);
         if (debt == 0) return type(uint256).max;
         uint256 collateralValue = _collateralValueInWbnb(info.collateralShares);
-        return (collateralValue * liquidationThresholdBps * 1e18) / MAX_BPS / debt;
+        return Math.mulDiv(Math.mulDiv(collateralValue, liquidationThresholdBps, MAX_BPS), WAD, debt);
     }
 
     // ---------------------------------------------------------------------
     // Liquidation — permissionless, another job suited to an automated agent.
     // ---------------------------------------------------------------------
 
-    function liquidate(address borrower, uint256 repayAmount) external nonReentrant returns (uint256 actualRepaid, uint256 collateralSeized) {
+    function liquidate(address borrower, uint256 repayAmount)
+        external
+        nonReentrant
+        returns (uint256 actualRepaid, uint256 collateralSeized)
+    {
         accrueInterest();
         BorrowerInfo storage info = borrowers[borrower];
         uint256 debt = _currentDebt(info);
@@ -316,15 +334,19 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         totalBorrows -= actualRepaid;
 
         uint256 collateralValue = _collateralValueInWbnb(info.collateralShares);
-        uint256 seizeValueInWbnb = (actualRepaid * (MAX_BPS + liquidationBonusBps)) / MAX_BPS;
+        // Round the seizure value UP (Math.Rounding.Ceil): the liquidation
+        // bonus is owed to the liquidator, and truncating it would silently
+        // shave the bonus and leave the protocol short. The share count below
+        // is rounded DOWN instead, so the borrower never loses more
+        // collateral than the bonus entitles them to.
+        uint256 seizeValueInWbnb = Math.mulDiv(actualRepaid, MAX_BPS + liquidationBonusBps, MAX_BPS, Math.Rounding.Ceil);
 
         // Proportional slice of the borrower's collateral shares worth
         // `seizeValueInWbnb`, capped at what they actually have left (if the
         // position is deep enough underwater that this cap binds, the
         // protocol is left with uncovered bad debt — see contract header).
-        collateralSeized = collateralValue == 0
-            ? 0
-            : (info.collateralShares * seizeValueInWbnb) / collateralValue;
+        collateralSeized =
+            collateralValue == 0 ? 0 : Math.mulDiv(info.collateralShares, seizeValueInWbnb, collateralValue);
         if (collateralSeized > info.collateralShares) collateralSeized = info.collateralShares;
 
         info.collateralShares -= collateralSeized;
@@ -344,7 +366,9 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         uint256 liquidationBonusBps_,
         uint256 reserveFactorBps_
     ) external onlyOwner {
-        if (liquidationThresholdBps_ > MAX_LIQUIDATION_THRESHOLD_BPS) revert RiskParamOutOfRange();
+        if (liquidationThresholdBps_ > MAX_LIQUIDATION_THRESHOLD_BPS) {
+            revert RiskParamOutOfRange();
+        }
         if (liquidationBonusBps_ > MAX_LIQUIDATION_BONUS_BPS) revert RiskParamOutOfRange();
         if (reserveFactorBps_ > MAX_RESERVE_FACTOR_BPS) revert RiskParamOutOfRange();
         if (maxLtvBps_ + LTV_SAFETY_BUFFER_BPS > liquidationThresholdBps_) revert RiskParamOutOfRange();
@@ -357,10 +381,10 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
     }
 
     function setInterestRateModel(uint256 baseRateBpsPerYear, uint256 multiplierBpsPerYear) external onlyOwner {
-        require(baseRateBpsPerYear <= 1_000, "base rate too high"); // hard cap 10%/yr
-        require(multiplierBpsPerYear <= 10_000, "multiplier too high"); // hard cap 100%/yr
-        baseRatePerSecond = (baseRateBpsPerYear * 1e14) / SECONDS_PER_YEAR; // bps(1e4) -> wad(1e18): *1e14
-        multiplierPerSecond = (multiplierBpsPerYear * 1e14) / SECONDS_PER_YEAR;
+        if (baseRateBpsPerYear > 1_000) revert RateModelOutOfRange(); // hard cap 10%/yr
+        if (multiplierBpsPerYear > 10_000) revert RateModelOutOfRange(); // hard cap 100%/yr
+        baseRatePerSecond = (baseRateBpsPerYear * BPS_TO_WAD_PER_YEAR) / SECONDS_PER_YEAR;
+        multiplierPerSecond = (multiplierBpsPerYear * BPS_TO_WAD_PER_YEAR) / SECONDS_PER_YEAR;
         emit RiskParamsUpdated();
     }
 
@@ -369,10 +393,21 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         emit BorrowingPausedSet(paused_);
     }
 
+    /// @notice Withdraws protocol revenue (the reserve factor) to `to`.
+    /// @dev The reserve is deliberately OUTSIDE the suppliers' claim
+    ///      (`_totalAssets() = cash + totalBorrows - totalReserves`), so
+    ///      withdrawing it leaves the suppliers' claim untouched — the
+    ///      `amount` cancels out of `_totalAssets()` on both sides.
+    ///      The amount is capped twice: by the accrued reserve, and by the
+    ///      WBNB actually held. Reserves accrue while the same WBNB may be
+    ///      lent out, so the two balances can diverge; without the cash cap
+    ///      this call would revert once reserves exceed the balance.
     function withdrawReserves(uint256 amount, address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
         accrueInterest();
+        uint256 cash = wbnb.balanceOf(address(this));
         if (amount > totalReserves) amount = totalReserves;
+        if (amount > cash) amount = cash;
         totalReserves -= amount;
         wbnb.safeTransfer(to, amount);
         emit ReservesWithdrawn(amount, to);

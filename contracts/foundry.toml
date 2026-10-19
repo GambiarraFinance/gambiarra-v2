@@ -3,6 +3,9 @@ src = "src"
 out = "out"
 libs = ["lib"]
 solc_version = "0.8.26"
+# Target the Paris EVM so the bytecode does not contain PUSH0, which some
+# BNB Smart Chain validators/configs have historically rejected. Safe on BSC.
+evm_version = "paris"
 optimizer = true
 optimizer_runs = 999_999
 via_ir = true

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 /// @title IPancakeRouter02
 /// @notice Minimal subset of the PancakeSwap V2 router used by GambVault to
