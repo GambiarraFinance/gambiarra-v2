@@ -1,5 +1,10 @@
+import { createPublicClient, http, parseAbi } from "viem";
+import { bsc } from "viem/chains";
+import { formatCompactToken, formatTokenAmount } from "@/lib/format";
+
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://gambiarra.finance";
 export const GITHUB_URL = "https://github.com/GambiarraFinance";
+export const REPO_URL = `${GITHUB_URL}/gambiarra-v2`;
 
 export const CHAIN = {
   id: 56,
@@ -17,12 +22,12 @@ export const ADDRESSES = {
 
 /**
  * Legacy MasterChef facts measured during the on-chain audit.
- * Used as a fallback when the public RPC is unreachable so the page and the
+ * Used as a fallback when every RPC is unreachable so the page and the
  * agent endpoints never lie with zeros.
  */
 export const LEGACY_FALLBACK = {
   poolLength: 30,
-  totalAllocPoint: "2560000000000000000000000000000",
+  totalAllocPoint: "2557828962486000000000400000000",
   gambPerBlock: "3000000000000000000",
   owner: "0x0000000000000000000000000000000000000000",
   totalSupply: "2190000000000000000000000000",
@@ -30,10 +35,13 @@ export const LEGACY_FALLBACK = {
   decimals: 18,
 } as const;
 
+export type DataSource = "fork" | "rpc" | "fallback";
+
 export type LegacyStats = {
   chainId: number;
   chainName: string;
-  source: "rpc" | "fallback";
+  /** Where the numbers came from: local anvil fork, public RPC, or the audit snapshot. */
+  source: DataSource;
   fetchedAt: string;
   blockNumber: string | null;
   masterChef: {
@@ -60,84 +68,71 @@ export type LegacyStats = {
   };
 };
 
-type RpcResponse = {
-  result?: string;
-  error?: { message?: string };
+const legacyAbi = parseAbi([
+  "function poolLength() view returns (uint256)",
+  "function totalAllocPoint() view returns (uint256)",
+  "function gambPerBlock() view returns (uint256)",
+  "function owner() view returns (address)",
+  "function decimals() view returns (uint8)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+]);
+
+/**
+ * Dev fork mode.
+ *
+ * In `next dev` the app talks to a local Anvil fork of BSC first
+ * (`anvil --fork-url ... --chain-id 56`) and only falls back to public RPCs
+ * when the fork is not running. Set `USE_BSC_FORK=0` to disable it, or point
+ * `BSC_FORK_RPC_URL` at another fork endpoint (e.g. a remote Tenderly fork).
+ *
+ * Production builds never try the fork.
+ */
+export const FORK_URL = process.env.BSC_FORK_RPC_URL ?? "http://127.0.0.1:8545";
+export const FORK_ENABLED = process.env.NODE_ENV !== "production" && process.env.USE_BSC_FORK !== "0";
+
+type RpcCandidate = {
+  source: Exclude<DataSource, "fallback">;
+  url: string;
 };
 
-const RPC_ENDPOINTS = [
+const PUBLIC_RPC_URLS = [
   process.env.BSC_RPC_URL,
   "https://bsc-dataseed.binance.org",
   "https://bsc-dataseed1.defibit.io",
   "https://bsc-dataseed1.ninicoin.io",
 ].filter(Boolean) as string[];
 
-const SELECTORS = {
-  poolLength: "0x081e3eda",
-  totalAllocPoint: "0x17caf6f1",
-  gambPerBlock: "0x7c5a1a5b",
-  owner: "0x8da5cb5b",
-  totalSupply: "0x18160ddd",
-  balanceOf: "0x70a08231",
-  decimals: "0x313ce567",
-} as const;
-
-function padAddress(address: string): string {
-  return address.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+function rpcCandidates(): RpcCandidate[] {
+  const candidates: RpcCandidate[] = [];
+  if (FORK_ENABLED) candidates.push({ source: "fork", url: FORK_URL });
+  for (const url of PUBLIC_RPC_URLS) candidates.push({ source: "rpc", url });
+  return candidates;
 }
 
-async function rpcCall(endpoint: string, to: string, data: string): Promise<string> {
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_call",
-      params: [{ to, data }, "latest"],
+function publicClientFor(url: string) {
+  return createPublicClient({
+    chain: bsc,
+    transport: http(url, {
+      timeout: 3_500,
+      retryCount: 0,
+      fetchOptions: { cache: "no-store" },
     }),
-    signal: AbortSignal.timeout(3_500),
-    cache: "no-store",
   });
-
-  if (!response.ok) throw new Error(`RPC ${response.status}`);
-  const payload = (await response.json()) as RpcResponse;
-  if (payload.error || typeof payload.result !== "string") {
-    throw new Error(payload.error?.message ?? "empty RPC result");
-  }
-  return payload.result;
 }
 
-async function rpcBlockNumber(endpoint: string): Promise<string | null> {
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }),
-      signal: AbortSignal.timeout(3_500),
-      cache: "no-store",
-    });
-    const payload = (await response.json()) as RpcResponse;
-    return typeof payload.result === "string" ? BigInt(payload.result).toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-function formatUnits(value: bigint, decimals: number): string {
-  const base = BigInt(10) ** BigInt(decimals);
-  const whole = value / base;
-  const fraction = (value % base).toString().padStart(decimals, "0").replace(/0+$/, "");
-  return fraction.length > 0 ? `${whole}.${fraction.slice(0, 4)}` : whole.toString();
+function formatAmount(value: bigint, decimals: number): string {
+  return formatTokenAmount(value, decimals, 4);
 }
 
 function formatCompact(value: bigint, decimals: number): string {
-  const asNumber = Number(value) / 10 ** decimals;
-  if (!Number.isFinite(asNumber)) return value.toString();
-  if (asNumber >= 1e9) return `${(asNumber / 1e9).toFixed(2)}B`;
-  if (asNumber >= 1e6) return `${(asNumber / 1e6).toFixed(1)}M`;
-  if (asNumber >= 1e3) return `${(asNumber / 1e3).toFixed(1)}K`;
-  return asNumber.toFixed(2).replace(/\.00$/, "");
+  return formatCompactToken(value, decimals, 2);
+}
+
+export function sourceLabel(source: DataSource): string {
+  if (source === "fork") return "fork local (anvil)";
+  if (source === "rpc") return "RPC público BSC";
+  return "snapshot auditado";
 }
 
 function fallbackStats(): LegacyStats {
@@ -154,15 +149,71 @@ function fallbackStats(): LegacyStats {
       poolLength: LEGACY_FALLBACK.poolLength,
       totalAllocPoint: LEGACY_FALLBACK.totalAllocPoint,
       gambPerBlock: LEGACY_FALLBACK.gambPerBlock,
-      gambPerBlockFormatted: "3",
+      gambPerBlockFormatted: formatAmount(BigInt(LEGACY_FALLBACK.gambPerBlock), LEGACY_FALLBACK.decimals),
     },
     gamb: {
       address: ADDRESSES.gambToken,
       decimals: LEGACY_FALLBACK.decimals,
       totalSupply: LEGACY_FALLBACK.totalSupply,
-      totalSupplyFormatted: "2.19B",
+      totalSupplyFormatted: formatCompact(BigInt(LEGACY_FALLBACK.totalSupply), LEGACY_FALLBACK.decimals),
       masterChefBalance: LEGACY_FALLBACK.masterChefBalance,
-      masterChefBalanceFormatted: "329M",
+      masterChefBalanceFormatted: formatCompact(
+        BigInt(LEGACY_FALLBACK.masterChefBalance),
+        LEGACY_FALLBACK.decimals,
+      ),
+    },
+    lp: {
+      address: ADDRESSES.gambWbnbLp,
+      poolIds: [16, 25],
+      note: "O mesmo par GAMB/WBNB aparece nos pools 16 e 25 do MasterChef, com pesos diferentes.",
+    },
+  };
+}
+
+async function readLegacy(candidate: RpcCandidate): Promise<LegacyStats> {
+  const client = publicClientFor(candidate.url);
+  const masterChef = { address: ADDRESSES.masterChef, abi: legacyAbi } as const;
+  const gamb = { address: ADDRESSES.gambToken, abi: legacyAbi } as const;
+
+  const [chainId, blockNumber, poolLength, totalAllocPoint, gambPerBlock, owner, decimals] = await Promise.all([
+    client.getChainId(),
+    client.getBlockNumber(),
+    client.readContract({ ...masterChef, functionName: "poolLength" }),
+    client.readContract({ ...masterChef, functionName: "totalAllocPoint" }),
+    client.readContract({ ...masterChef, functionName: "gambPerBlock" }),
+    client.readContract({ ...masterChef, functionName: "owner" }),
+    client.readContract({ ...gamb, functionName: "decimals" }),
+  ]);
+
+  const [totalSupply, masterChefBalance] = await Promise.all([
+    client.readContract({ ...gamb, functionName: "totalSupply" }),
+    client.readContract({ ...gamb, functionName: "balanceOf", args: [ADDRESSES.masterChef] }),
+  ]);
+
+  const ownerAddress = owner.toLowerCase();
+
+  return {
+    chainId,
+    chainName: CHAIN.name,
+    source: candidate.source,
+    fetchedAt: new Date().toISOString(),
+    blockNumber: blockNumber.toString(),
+    masterChef: {
+      address: ADDRESSES.masterChef,
+      owner: ownerAddress,
+      ownerRenounced: /^0x0{40}$/.test(ownerAddress),
+      poolLength: Number(poolLength),
+      totalAllocPoint: totalAllocPoint.toString(),
+      gambPerBlock: gambPerBlock.toString(),
+      gambPerBlockFormatted: formatAmount(gambPerBlock, decimals),
+    },
+    gamb: {
+      address: ADDRESSES.gambToken,
+      decimals,
+      totalSupply: totalSupply.toString(),
+      totalSupplyFormatted: formatCompact(totalSupply, decimals),
+      masterChefBalance: masterChefBalance.toString(),
+      masterChefBalanceFormatted: formatCompact(masterChefBalance, decimals),
     },
     lp: {
       address: ADDRESSES.gambWbnbLp,
@@ -173,64 +224,22 @@ function fallbackStats(): LegacyStats {
 }
 
 /**
- * Reads the legacy MasterChef directly over JSON-RPC (no indexer, no API key).
- * Public BSC RPCs are flaky, so any failure degrades to audited snapshot values
- * instead of a broken page.
+ * Reads the legacy MasterChef with viem (no indexer, no API key).
+ *
+ * Candidate order: dev fork (when enabled) → configured/public BSC RPCs.
+ * Any failure moves to the next candidate and, if all fail, degrades to the
+ * audited snapshot instead of a broken page.
  */
 export async function getLegacyStats(): Promise<LegacyStats> {
-  const base = fallbackStats();
-
-  for (const endpoint of RPC_ENDPOINTS) {
+  for (const candidate of rpcCandidates()) {
     try {
-      const [poolLengthHex, totalAllocHex, perBlockHex, ownerHex, supplyHex, balanceHex, decimalsHex, blockNumber] =
-        await Promise.all([
-          rpcCall(endpoint, ADDRESSES.masterChef, SELECTORS.poolLength),
-          rpcCall(endpoint, ADDRESSES.masterChef, SELECTORS.totalAllocPoint),
-          rpcCall(endpoint, ADDRESSES.masterChef, SELECTORS.gambPerBlock),
-          rpcCall(endpoint, ADDRESSES.masterChef, SELECTORS.owner),
-          rpcCall(endpoint, ADDRESSES.gambToken, SELECTORS.totalSupply),
-          rpcCall(endpoint, ADDRESSES.gambToken, `${SELECTORS.balanceOf}${padAddress(ADDRESSES.masterChef)}`),
-          rpcCall(endpoint, ADDRESSES.gambToken, SELECTORS.decimals),
-          rpcBlockNumber(endpoint),
-        ]);
-
-      const decimals = Number(BigInt(decimalsHex));
-      const totalSupply = BigInt(supplyHex);
-      const masterChefBalance = BigInt(balanceHex);
-      const perBlock = BigInt(perBlockHex);
-      const owner = `0x${ownerHex.slice(-40)}`.toLowerCase();
-
-      return {
-        chainId: CHAIN.id,
-        chainName: CHAIN.name,
-        source: "rpc",
-        fetchedAt: new Date().toISOString(),
-        blockNumber,
-        masterChef: {
-          address: ADDRESSES.masterChef,
-          owner,
-          ownerRenounced: /^0x0{40}$/.test(owner),
-          poolLength: Number(BigInt(poolLengthHex)),
-          totalAllocPoint: BigInt(totalAllocHex).toString(),
-          gambPerBlock: perBlock.toString(),
-          gambPerBlockFormatted: formatUnits(perBlock, decimals),
-        },
-        gamb: {
-          address: ADDRESSES.gambToken,
-          decimals,
-          totalSupply: totalSupply.toString(),
-          totalSupplyFormatted: formatCompact(totalSupply, decimals),
-          masterChefBalance: masterChefBalance.toString(),
-          masterChefBalanceFormatted: formatCompact(masterChefBalance, decimals),
-        },
-        lp: base.lp,
-      };
+      return await readLegacy(candidate);
     } catch {
-      // try the next endpoint
+      // try the next candidate
     }
   }
 
-  return base;
+  return fallbackStats();
 }
 
 export const CONTRACTS = [

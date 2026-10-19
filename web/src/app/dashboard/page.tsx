@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { connection } from "next/server";
-import { ADDRESSES, CHAIN, CONTRACTS, getLegacyStats } from "@/lib/protocol";
+import { ADDRESSES, CHAIN, CONTRACTS, getLegacyStats, sourceLabel } from "@/lib/protocol";
+import { formatScientific } from "@/lib/format";
+import { WalletPanel } from "@/components/WalletPanel";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -60,10 +62,14 @@ export default async function DashboardPage() {
             <span className="chip text-ink-soft">
               <span
                 className={`inline-block h-2 w-2 rounded-full ${
-                  legacy.source === "rpc" ? "bg-tropic" : "bg-sun"
+                  legacy.source === "fork"
+                    ? "bg-ocean"
+                    : legacy.source === "rpc"
+                      ? "bg-tropic"
+                      : "bg-sun"
                 }`}
               />
-              {legacy.source === "rpc" ? "rpc ao vivo" : "snapshot"}
+              {legacy.source === "fork" ? "fork local" : legacy.source === "rpc" ? "rpc ao vivo" : "snapshot"}
             </span>
             <Link href="/" className="btn btn-ghost px-4 py-2 text-xs">
               ← Home
@@ -80,8 +86,9 @@ export default async function DashboardPage() {
               Estado da <span className="text-tropic">gambiarra</span>.
             </h1>
             <p className="copy mt-4 max-w-2xl">
-              Números lidos direto do contrato legado via JSON-RPC público. Se a leitura falhar, a
-              página mostra o snapshot auditado — nunca zero.
+              Números lidos direto do contrato legado com <strong className="text-ink">viem</strong>: fork
+              local quando você roda em dev, RPC público em produção. Se a leitura falhar, a página mostra o
+              snapshot auditado — nunca zero.
             </p>
           </div>
           <div className="rounded-2xl border border-ink/15 bg-white/45 px-5 py-4">
@@ -103,6 +110,10 @@ export default async function DashboardPage() {
           ))}
         </section>
 
+        <div className="mt-10">
+          <WalletPanel />
+        </div>
+
         <div className="mt-10 grid grid-cols-1 gap-6 lg:grid-cols-[1.15fr_0.85fr]">
           <section className="card p-6 sm:p-8" aria-labelledby="legado-title">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -117,9 +128,9 @@ export default async function DashboardPage() {
                 ["Endereço", shortAddress(ADDRESSES.masterChef)],
                 ["Token GAMB", shortAddress(ADDRESSES.gambToken)],
                 ["LP GAMB/WBNB", shortAddress(ADDRESSES.gambWbnbLp)],
-                ["totalAllocPoint", Number(legacy.masterChef.totalAllocPoint).toExponential(2)],
+                ["totalAllocPoint", formatScientific(BigInt(legacy.masterChef.totalAllocPoint), 3)],
                 ["Bloco lido", legacy.blockNumber ?? "não disponível"],
-                ["Fonte", legacy.source === "rpc" ? "RPC público BSC" : "snapshot auditado"],
+                ["Fonte", sourceLabel(legacy.source)],
               ].map(([label, value]) => (
                 <div key={label} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <dt className="font-mono text-[11px] uppercase tracking-widest text-ink-soft">{label}</dt>
@@ -146,9 +157,9 @@ export default async function DashboardPage() {
               >
                 Ver no BscScan ↗
               </a>
-              <Link href="/api/stats" className="btn btn-ghost px-4 py-2.5 text-xs">
+              <a href="/api/stats" className="btn btn-ghost px-4 py-2.5 text-xs">
                 JSON bruto
-              </Link>
+              </a>
             </div>
           </section>
 
@@ -181,9 +192,9 @@ export default async function DashboardPage() {
 
             <div className="mt-6 rounded-xl border border-sand/20 bg-sand/5 p-4">
               <p className="font-mono text-[11px] uppercase tracking-widest text-sun">testes</p>
-              <p className="display mt-1 text-3xl">13 / 13</p>
+              <p className="display mt-1 text-3xl">17 / 17</p>
               <p className="mt-1 text-xs text-sand/60">
-                Foundry · inclui ataque de inflação de shares e prova de fair value do oráculo
+                Foundry · + 16 fork tests contra a BSC real (gated por BSC_RPC_URL)
               </p>
             </div>
           </section>
@@ -202,12 +213,12 @@ export default async function DashboardPage() {
               </p>
             </div>
             <div className="flex shrink-0 gap-2">
-              <Link href="/agents.json" className="btn btn-primary px-4 py-2.5 text-xs">
+              <a href="/agents.json" className="btn btn-primary px-4 py-2.5 text-xs">
                 agents.json
-              </Link>
-              <Link href="/llms.txt" className="btn btn-sun px-4 py-2.5 text-xs">
+              </a>
+              <a href="/llms.txt" className="btn btn-sun px-4 py-2.5 text-xs">
                 llms.txt
-              </Link>
+              </a>
             </div>
           </div>
         </section>

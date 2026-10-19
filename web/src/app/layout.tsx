@@ -89,6 +89,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="pt-BR"
+      data-scroll-behavior="smooth"
       className={`${bricolage.variable} ${dmSans.variable} ${spaceMono.variable} h-full antialiased`}
     >
       <body className="grain min-h-full flex flex-col">

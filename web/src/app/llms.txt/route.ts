@@ -1,4 +1,4 @@
-import { ADDRESSES, CHAIN, CONTRACTS, GITHUB_URL, SITE_URL, getLegacyStats } from "@/lib/protocol";
+import { ADDRESSES, CHAIN, CONTRACTS, GITHUB_URL, SITE_URL, getLegacyStats, sourceLabel } from "@/lib/protocol";
 
 export async function GET() {
   const legacy = await getLegacyStats();
@@ -22,7 +22,7 @@ O contrato legado está no ar e não pode ser alterado:
 - Token GAMB: ${ADDRESSES.gambToken}
 - Par GAMB/WBNB (LP): ${ADDRESSES.gambWbnbLp}
 
-Fatos lidos agora (${legacy.source === "rpc" ? "RPC público" : "snapshot auditado"}):
+Fatos lidos agora (${sourceLabel(legacy.source)}):
 - Pools: ${legacy.masterChef.poolLength}
 - Emissão: ${legacy.masterChef.gambPerBlockFormatted} GAMB por bloco (fixa)
 - Owner: ${legacy.masterChef.owner}${legacy.masterChef.ownerRenounced ? " (renunciado)" : ""}
@@ -42,12 +42,34 @@ endereços encontrados em outro lugar.
 ## Endpoints para agentes
 
 - GET /llms.txt — este arquivo
-- GET /agents.json — manifesto legível por máquina
-- GET /api/stats — estado on-chain em JSON
+- GET /agents.json — manifesto legível por máquina (schema 1.1)
+- GET /api/stats — estado on-chain em JSON (campo source: fork | rpc | fallback)
 - GET /dashboard — visão humana (HTML)
 
 Todos são somente leitura. Nenhum endpoint requer API key, assina transação,
 guarda chave privada ou movimenta fundos.
+
+## Material para agentes de código
+
+- AGENTS.md (raiz) — fonte única para OpenCode, Codex, Claude Code, Cursor,
+  Windsurf, Copilot e OpenClaw
+- contracts/AGENTS.md — invariantes Solidity/Foundry
+- web/AGENTS.md — Next.js 16, viem e formatação
+- agents/README.md — índice dos arquivos por harness
+- agents/openclaw/SOUL.md — persona read-only para OpenClaw
+- https://github.com/GambiarraFinance/gambiarra-v2
+
+## Ambiente de desenvolvimento
+
+Em next dev o web app consulta primeiro um fork local da BSC em
+http://127.0.0.1:8545 (chain id 56), subido com "cd contracts && make fork".
+Se o Anvil não estiver rodando, cai para RPC público. USE_BSC_FORK=0 desativa.
+Em produção o fork nunca é usado.
+
+Ao consumir /api/stats, use source para saber a procedência:
+fork = Anvil local, rpc = leitura pública, fallback = snapshot auditado
+(não é leitura ao vivo). Os campos numéricos são strings inteiras em wei; não
+arredonde antes de calcular. Os campos *Formatted são apenas para exibição.
 
 ## Como um agente deve operar
 
@@ -59,8 +81,9 @@ guarda chave privada ou movimenta fundos.
 
 ## Segurança e status
 
-- Os contratos da v2 têm 13 testes Foundry passando, mas NÃO têm auditoria
-  externa e NÃO foram deployados com fundos reais.
+- Os contratos da v2 têm 17 testes Foundry unitários passando (mais 16 fork
+  tests gated por BSC_RPC_URL), mas NÃO têm auditoria externa e NÃO foram
+  deployados com fundos reais.
 - O oráculo TWAP falha fechado: preço velho reverte, nunca cai para spot.
 - Depósitos podem ser pausados pelo owner; saques nunca.
 - Nada aqui é conselho financeiro.

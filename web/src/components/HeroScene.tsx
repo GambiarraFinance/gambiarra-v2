@@ -229,9 +229,11 @@ export function HeroScene() {
       // ---------------------------------------------------------------
       // Render loop
       // ---------------------------------------------------------------
-      const clock = new THREE.Clock();
+      const timer = new THREE.Timer();
+      timer.connect(document);
       const render = () => {
-        const t = clock.getElapsedTime();
+        timer.update();
+        const t = timer.getElapsed();
         group.rotation.y = 0.42 + Math.sin(t * 0.32) * 0.16 + pointer.x * 0.22;
         group.rotation.x = -0.42 + Math.sin(t * 0.42) * 0.04 - pointer.y * 0.12;
         group.position.y = Math.sin(t * 0.9) * 0.11;
@@ -257,6 +259,7 @@ export function HeroScene() {
 
       cleanup = () => {
         cancelAnimationFrame(raf);
+        timer.disconnect();
         observer.disconnect();
         window.removeEventListener("pointermove", onPointerMove);
         scene.traverse((object) => {

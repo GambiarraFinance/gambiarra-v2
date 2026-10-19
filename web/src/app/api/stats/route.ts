@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CHAIN, CONTRACTS, SITE_URL, getLegacyStats } from "@/lib/protocol";
+import { CHAIN, CONTRACTS, SITE_URL, getLegacyStats, sourceLabel } from "@/lib/protocol";
 
 export async function GET() {
   const legacy = await getLegacyStats();
@@ -9,8 +9,10 @@ export async function GET() {
       ok: true,
       generatedAt: new Date().toISOString(),
       site: SITE_URL,
-      chain: { id: CHAIN.id, name: CHAIN.name },
+      chain: { id: legacy.chainId, name: CHAIN.name },
       source: legacy.source,
+      sourceLabel: sourceLabel(legacy.source),
+      fork: legacy.source === "fork",
       blockNumber: legacy.blockNumber,
       masterChef: legacy.masterChef,
       gamb: legacy.gamb,

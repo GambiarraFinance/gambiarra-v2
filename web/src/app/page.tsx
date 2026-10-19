@@ -9,7 +9,9 @@ import {
   GITHUB_URL,
   SITE_URL,
   getLegacyStats,
+  sourceLabel,
 } from "@/lib/protocol";
+import { formatScientific } from "@/lib/format";
 
 export const instant = false;
 
@@ -37,9 +39,7 @@ function shortAddress(address: string) {
 }
 
 function scientific(value: string) {
-  const asNumber = Number(value);
-  if (!Number.isFinite(asNumber) || asNumber === 0) return value;
-  return asNumber.toExponential(1).replace("e+", "e");
+  return formatScientific(BigInt(value), 3);
 }
 
 export default async function Home() {
@@ -152,9 +152,9 @@ export default async function Home() {
                 <Link href="/dashboard" className="btn btn-primary">
                   Ver o dashboard <span aria-hidden="true">→</span>
                 </Link>
-                <Link href="/agents.json" className="btn btn-sun">
+                <a href="/agents.json" className="btn btn-sun">
                   agents.json
-                </Link>
+                </a>
                 <a href="#agentes" className="btn btn-ghost">
                   Como um agente entra
                 </a>
@@ -306,7 +306,7 @@ export default async function Home() {
           </div>
 
           <p className="mt-6 font-mono text-[11px] uppercase tracking-widest text-ink-soft">
-            fonte: {legacy.source === "rpc" ? "RPC público BSC" : "snapshot auditado"} · lido em{" "}
+            fonte: {sourceLabel(legacy.source)} · lido em{" "}
             {new Date(legacy.fetchedAt).toLocaleDateString("pt-BR")}
           </p>
         </section>
@@ -478,7 +478,7 @@ curl -s ${SITE_URL}/api/stats \\
 
             <ul className="space-y-3">
               {[
-                ["13 testes Foundry passando", "Inclui prova de que o ataque de inflação de shares via doação é economicamente inviável."],
+                ["17 testes Foundry + 16 fork tests", "Inclui prova de que o ataque de inflação de shares via doação é economicamente inviável e invariantes do MasterChef legado contra a BSC real."],
                 ["Oráculo fail-closed", "Se o TWAP está velho, a valuation reverte. Nunca cai para o preço spot."],
                 ["Colateral com LTV de 40%", "Threshold de liquidação em 50%, com buffers verificados no setter."],
                 ["Saque nunca pausa", "O owner pode pausar depósitos, nunca bloquear retirada."],
@@ -522,9 +522,9 @@ curl -s ${SITE_URL}/api/stats \\
                 <Link href="/dashboard" className="btn btn-sun">
                   Abrir dashboard
                 </Link>
-                <Link href="/llms.txt" className="btn btn-ghost border-sand/40 text-sand hover:bg-sand/10">
+                <a href="/llms.txt" className="btn btn-ghost border-sand/40 text-sand hover:bg-sand/10">
                   llms.txt
-                </Link>
+                </a>
               </div>
             </div>
           </div>
@@ -556,9 +556,9 @@ curl -s ${SITE_URL}/api/stats \\
             <p className="eyebrow text-ink-soft">Protocolo</p>
             <ul className="mt-4 space-y-2 text-sm">
               <li><Link href="/dashboard" className="link-underline">Dashboard</Link></li>
-              <li><Link href="/agents.json" className="link-underline">agents.json</Link></li>
-              <li><Link href="/llms.txt" className="link-underline">llms.txt</Link></li>
-              <li><Link href="/api/stats" className="link-underline">API de stats</Link></li>
+              <li><a href="/agents.json" className="link-underline">agents.json</a></li>
+              <li><a href="/llms.txt" className="link-underline">llms.txt</a></li>
+              <li><a href="/api/stats" className="link-underline">API de stats</a></li>
             </ul>
           </nav>
 
