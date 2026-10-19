@@ -615,8 +615,10 @@ contract GambV2ForkTest is Test {
 
     /// @dev A position can go underwater with ZERO price move: the borrow
     ///      accrues real interest while the collateral sits still. The
-    ///      permissionless liquidator must then be able to close it against
-    ///      the real pool and walk away with real collateral.
+    ///      permissionless liquidator must then be able to act against the real
+    ///      pool and walk away with real collateral. One round is bounded by the
+    ///      close factor (50% of the debt), and that bounded repayment must
+    ///      already de-risk the position — the liquidation bonus deslevers it.
     function test_fork_liquidationAfterInterestDrift() public onFork {
         _dealWbnb(user, 2e18);
         _dealWbnb(liquidator, 2e18);
@@ -653,6 +655,7 @@ contract GambV2ForkTest is Test {
 
         assertLt(lendingPool.healthFactor(user), 1e18, "interest alone must make it liquidatable");
         uint256 debt = lendingPool.currentDebt(user);
+        uint256 healthBefore = lendingPool.healthFactor(user);
         (,, uint256 collateralBefore) = lendingPool.borrowers(user);
         uint256 liquidatorSharesBefore = vault.balanceOf(liquidator);
 
@@ -661,11 +664,13 @@ contract GambV2ForkTest is Test {
         (uint256 repaid, uint256 seized) = lendingPool.liquidate(user, type(uint256).max);
         vm.stopPrank();
 
-        assertEq(repaid, debt, "the whole debt must be repaid");
+        // Close factor: a single liquidation repays at most half the debt.
+        assertEq(repaid, debt / 2, "one round must be capped by the close factor");
         assertGt(seized, 0, "the liquidator must seize collateral");
         assertLt(seized, collateralBefore, "part of the collateral must survive the bonus");
-        assertEq(lendingPool.currentDebt(user), 0, "the debt must be cleared");
+        assertEq(lendingPool.currentDebt(user), debt - repaid, "half the debt must remain for the next round");
         assertEq(vault.balanceOf(liquidator) - liquidatorSharesBefore, seized, "the liquidator owns the shares");
+        assertGt(lendingPool.healthFactor(user), healthBefore, "the bounded round must de-risk the position");
 
         // The seized collateral is real: it redeems into real LP.
         vm.prank(liquidator);
