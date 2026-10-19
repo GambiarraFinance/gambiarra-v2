@@ -61,6 +61,7 @@ contract GambV2ForkTest is Test {
 
     address internal user = address(0xA11CE);
     address internal keeper = address(0xCAFE);
+    address internal liquidator = address(0x11D);
     address internal feeRecipient = address(0xFEE);
 
     bool internal forked;
@@ -494,6 +495,397 @@ contract GambV2ForkTest is Test {
         // Must be comfortably inside the 1.5% the vault tolerates.
         assertLt(measuredFeeBps, 150, "the real swap fee must fit inside the vault's slippage tolerance");
         emit log_named_uint("measured swap fee (bps)", measuredFeeBps);
+    }
+
+    // ------------------------------------------------------------------
+    // 8. Full journeys — the whole product, end to end, on live mainnet state
+    // ------------------------------------------------------------------
+
+    /// @dev The complete user journey in one test: deposit LP into the vault
+    ///      (staked into the REAL MasterChef), harvest REAL GAMB rewards, post
+    ///      the appreciated shares as collateral, borrow REAL WBNB, pay real
+    ///      interest, repay, withdraw and redeem. Every leg hits live BSC
+    ///      contracts; nothing is mocked.
+    function test_fork_fullJourney() public onFork {
+        _dealWbnb(user, 2e18);
+        _dealWbnb(address(this), 2e18);
+        _dealLp(user, 4e22);
+
+        // Someone has to fund the borrowing side of the pool.
+        vm.startPrank(address(this));
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        lendingPool.supply(1e18);
+        vm.stopPrank();
+
+        // 1) Deposit -> staked in the real MasterChef.
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        uint256 shares = vault.deposit(4e22, user);
+        vm.stopPrank();
+        assertEq(_stakedLp(), 4e22, "the deposit must be staked");
+        assertEq(lp.balanceOf(user), 0, "no LP may idle with the user");
+
+        // 2) Harvest -> the vault is worth more, fee and keeper are paid.
+        vm.roll(block.number + 2_000);
+        vm.warp(block.timestamp + 1 hours);
+        uint256 totalBefore = vault.totalAssets();
+        vm.prank(keeper);
+        vault.harvest(0, block.timestamp + 1 hours);
+        assertGt(vault.totalAssets(), totalBefore, "harvest must compound real rewards");
+        assertGt(gamb.balanceOf(feeRecipient), 0, "the fee recipient must be paid");
+        assertGt(gamb.balanceOf(keeper), 0, "the keeper must be paid");
+
+        // 3) Collateral -> borrow, valued by the real TWAP oracle.
+        _pokeOracle();
+        uint256 collateralShares = shares / 2;
+        vm.startPrank(user);
+        vault.approve(address(lendingPool), type(uint256).max);
+        lendingPool.depositCollateral(collateralShares, user);
+
+        uint256 collateralValue = oracle.fairValueOfLpInWbnb(vault.convertToAssets(collateralShares));
+        uint256 borrowAmount = (collateralValue * lendingPool.maxLtvBps() * 90) / (10_000 * 100);
+        uint256 wbnbBeforeBorrow = wbnb.balanceOf(user);
+        lendingPool.borrow(borrowAmount, user, user);
+        vm.stopPrank();
+
+        assertEq(wbnb.balanceOf(user) - wbnbBeforeBorrow, borrowAmount, "borrower receives real WBNB");
+        assertTrue(lendingPool.healthFactor(user) >= 1e18, "must be healthy after borrowing");
+
+        // 4) Interest accrues on the real pool.
+        vm.warp(block.timestamp + 30 days);
+        lendingPool.accrueInterest();
+        assertGt(lendingPool.currentDebt(user), borrowAmount, "the debt must grow with interest");
+
+        // 5) Repay, un-collateralize, redeem everything.
+        vm.startPrank(user);
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        lendingPool.repay(type(uint256).max, user);
+        lendingPool.withdrawCollateral(collateralShares, user, user);
+        uint256 assets = vault.redeem(shares, user, user);
+        vm.stopPrank();
+
+        assertEq(lendingPool.currentDebt(user), 0, "the journey must end debt-free");
+        assertGt(assets, 4e22, "the depositor must exit richer than they entered");
+        assertLt(_stakedLp(), 1e6, "the vault must be fully unstaked");
+    }
+
+    /// @dev The other side of the borrow: a supplier must actually earn the
+    ///      interest the borrower pays. This is the economic loop closing on
+    ///      live contracts — supply -> borrow -> accrue -> repay -> redeem and
+    ///      walk away with more WBNB than was deposited.
+    function test_fork_supplierEarnsRealInterestFromARealBorrower() public onFork {
+        address supplier = address(0x5A1);
+        _dealWbnb(supplier, 2e18);
+        _dealWbnb(user, 2e18);
+        _dealLp(user, 4e22);
+
+        _pokeOracle();
+
+        vm.startPrank(supplier);
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        uint256 supplierShares = lendingPool.supply(2e17);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        uint256 shares = vault.deposit(4e22, user);
+        vault.approve(address(lendingPool), type(uint256).max);
+        lendingPool.depositCollateral(shares, user);
+
+        uint256 collateralValue = oracle.fairValueOfLpInWbnb(vault.convertToAssets(shares));
+        uint256 borrowAmount = (collateralValue * lendingPool.maxLtvBps() * 90) / (10_000 * 100);
+        lendingPool.borrow(borrowAmount, user, user);
+        vm.stopPrank();
+
+        // A year of real interest.
+        vm.warp(block.timestamp + 365 days);
+        lendingPool.accrueInterest();
+        assertGt(lendingPool.currentDebt(user), borrowAmount, "the borrower owes more");
+
+        // The borrower settles up, releasing the liquidity back to the pool.
+        vm.startPrank(user);
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        lendingPool.repay(type(uint256).max, user);
+        vm.stopPrank();
+
+        vm.prank(supplier);
+        uint256 redeemed = lendingPool.redeem(supplierShares);
+        assertGt(redeemed, 2e17, "the supplier must earn the interest the borrower paid");
+    }
+
+    /// @dev A position can go underwater with ZERO price move: the borrow
+    ///      accrues real interest while the collateral sits still. The
+    ///      permissionless liquidator must then be able to close it against
+    ///      the real pool and walk away with real collateral.
+    function test_fork_liquidationAfterInterestDrift() public onFork {
+        _dealWbnb(user, 2e18);
+        _dealWbnb(liquidator, 2e18);
+        _dealLp(user, 4e22);
+
+        _pokeOracle();
+
+        // Thin liquidity -> high utilisation -> interest actually bites.
+        _dealWbnb(address(this), 1e18);
+        vm.startPrank(address(this));
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        lendingPool.supply(2e17);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        uint256 shares = vault.deposit(4e22, user);
+        vault.approve(address(lendingPool), type(uint256).max);
+        lendingPool.depositCollateral(shares, user);
+
+        uint256 collateralValue = oracle.fairValueOfLpInWbnb(vault.convertToAssets(shares));
+        uint256 borrowAmount = (collateralValue * lendingPool.maxLtvBps()) / 10_000;
+        borrowAmount = (borrowAmount * 98) / 100;
+        lendingPool.borrow(borrowAmount, user, user);
+        vm.stopPrank();
+
+        assertTrue(lendingPool.healthFactor(user) >= 1e18, "healthy at open");
+        assertLt(lendingPool.healthFactor(user), 2e18, "but thin");
+
+        // Two years of interest with no price move at all.
+        vm.warp(block.timestamp + 730 days);
+        _pokeOracle();
+        lendingPool.accrueInterest();
+
+        assertLt(lendingPool.healthFactor(user), 1e18, "interest alone must make it liquidatable");
+        uint256 debt = lendingPool.currentDebt(user);
+        (,, uint256 collateralBefore) = lendingPool.borrowers(user);
+        uint256 liquidatorSharesBefore = vault.balanceOf(liquidator);
+
+        vm.startPrank(liquidator);
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        (uint256 repaid, uint256 seized) = lendingPool.liquidate(user, type(uint256).max);
+        vm.stopPrank();
+
+        assertEq(repaid, debt, "the whole debt must be repaid");
+        assertGt(seized, 0, "the liquidator must seize collateral");
+        assertLt(seized, collateralBefore, "part of the collateral must survive the bonus");
+        assertEq(lendingPool.currentDebt(user), 0, "the debt must be cleared");
+        assertEq(vault.balanceOf(liquidator) - liquidatorSharesBefore, seized, "the liquidator owns the shares");
+
+        // The seized collateral is real: it redeems into real LP.
+        vm.prank(liquidator);
+        uint256 lpOut = vault.redeem(seized, liquidator, liquidator);
+        assertGt(lpOut, 0, "the seized collateral must redeem to real LP");
+    }
+
+    /// @dev Two depositors, one harvest: the rewards must be split by stake,
+    ///      not by who deposited first or who redeems first.
+    function test_fork_vaultRewardsAreSharedProportionally() public onFork {
+        address alice = address(0xA11CE1);
+        address bob = address(0xB0B1);
+        _dealLp(alice, 1e22);
+        _dealLp(bob, 3e22);
+
+        vm.startPrank(alice);
+        lp.approve(address(vault), type(uint256).max);
+        uint256 aliceShares = vault.deposit(1e22, alice);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        lp.approve(address(vault), type(uint256).max);
+        uint256 bobShares = vault.deposit(3e22, bob);
+        vm.stopPrank();
+
+        vm.roll(block.number + 2_000);
+        vm.warp(block.timestamp + 1 hours);
+        vm.prank(keeper);
+        vault.harvest(0, block.timestamp + 1 hours);
+
+        vm.prank(alice);
+        uint256 aliceAssets = vault.redeem(aliceShares, alice, alice);
+        vm.prank(bob);
+        uint256 bobAssets = vault.redeem(bobShares, bob, bob);
+
+        assertGt(aliceAssets, 1e22, "alice must earn on her deposit");
+        assertGt(bobAssets, 3e22, "bob must earn on his deposit");
+        // 3x the deposit must be ~3x the payout: nobody gets diluted.
+        assertApproxEqRel(bobAssets, aliceAssets * 3, 3e16, "rewards must be proportional");
+    }
+
+    /// @dev The vault must only ever stake into pool 25. Pool 16 holds the very
+    ///      same LP token, so a bug here would double-count the vault's stake
+    ///      and silently halve the reward rate.
+    function test_fork_vaultOnlyEverStakesIntoPool25() public onFork {
+        _dealLp(user, 100e18);
+
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        vault.deposit(100e18, user);
+        vm.stopPrank();
+
+        (uint256 staked25,) = masterChef.userInfo(25, address(vault));
+        (uint256 staked16,) = masterChef.userInfo(16, address(vault));
+
+        assertEq(vault.pid(), 25, "the vault must target pool 25");
+        assertEq(staked25, 100e18, "pool 25 must hold the stake");
+        assertEq(staked16, 0, "the duplicate pool 16 must never be touched");
+    }
+
+    // ------------------------------------------------------------------
+    // 9. Failure modes — pausing, emergencies, slippage and staleness
+    // ------------------------------------------------------------------
+
+    /// @dev Deposits are pausable, withdrawals are not. This is a promise the
+    ///      vault makes in its NatSpec; pin it against the live deployment.
+    function test_fork_vaultPauseBlocksDepositsButNeverWithdrawals() public onFork {
+        _dealLp(user, 100e18);
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        uint256 shares = vault.deposit(100e18, user);
+        vm.stopPrank();
+
+        vault.setDepositsPaused(true);
+        assertEq(vault.maxDeposit(user), 0, "deposits must be closed");
+
+        _dealLp(user, 1e18);
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        vm.expectRevert();
+        vault.deposit(1e18, user);
+        vm.stopPrank();
+
+        vm.prank(user);
+        uint256 assets = vault.redeem(shares, user, user);
+        assertApproxEqAbs(assets, 100e18, 2, "withdrawals must survive the pause");
+    }
+
+    /// @dev The emergency exit is the escape hatch if the upstream MasterChef
+    ///      ever looks stuck: pull the stake, stop harvesting, keep withdrawals.
+    function test_fork_vaultEmergencyExitKeepsWithdrawalsAlive() public onFork {
+        _dealLp(user, 100e18);
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        uint256 shares = vault.deposit(100e18, user);
+        vm.stopPrank();
+
+        assertEq(_stakedLp(), 100e18);
+
+        vault.emergencyExitMasterChef();
+        assertEq(_stakedLp(), 0, "the stake must be pulled out");
+        assertEq(lp.balanceOf(address(vault)), 100e18, "the LP must sit in the vault");
+        assertEq(vault.maxDeposit(user), 0, "deposits must be closed after the exit");
+
+        vm.expectRevert(GambVault.AlreadyExited.selector);
+        vault.harvest(0, block.timestamp + 1 hours);
+
+        vm.prank(user);
+        uint256 assets = vault.redeem(shares, user, user);
+        assertApproxEqAbs(assets, 100e18, 2, "withdrawals must still work");
+    }
+
+    function test_fork_harvestEnforcesDeadlineAndSlippage() public onFork {
+        _dealLp(user, 100e18);
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        vault.deposit(100e18, user);
+        vm.stopPrank();
+
+        vm.roll(block.number + 2_000);
+        vm.warp(block.timestamp + 1 hours);
+
+        vm.expectRevert(GambVault.DeadlineExpired.selector);
+        vault.harvest(0, block.timestamp - 1);
+
+        // Warms the pool so the next call really has rewards to compound.
+        vm.prank(keeper);
+        vault.harvest(0, block.timestamp + 1 hours);
+
+        vm.roll(block.number + 2_000);
+        vm.warp(block.timestamp + 1 hours);
+
+        vm.prank(keeper);
+        vm.expectRevert(GambVault.SlippageExceeded.selector);
+        vault.harvest(type(uint256).max, block.timestamp + 1 hours);
+    }
+
+    /// @dev The leverage ceiling is derived from the pool's LTV, not hardcoded.
+    ///      With 40% max LTV, 2x must be rejected and 1x is not leverage.
+    function test_fork_zapRejectsLeverageOutsideItsDerivedCeiling() public onFork {
+        _dealWbnb(user, 1e18);
+        _dealWbnb(address(this), 100e18);
+        _pokeOracle();
+
+        vm.startPrank(address(this));
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        lendingPool.supply(50e18);
+        vm.stopPrank();
+
+        uint256 deadline = block.timestamp + 1 hours;
+        vm.startPrank(user);
+        wbnb.approve(address(zap), type(uint256).max);
+        lendingPool.approveOperator(address(zap));
+
+        vm.expectRevert(GambLeverageZap.BadLeverage.selector);
+        zap.openLeveragedPosition(1e15, 20_000, 0, deadline);
+
+        vm.expectRevert(GambLeverageZap.BadLeverage.selector);
+        zap.openLeveragedPosition(1e15, 10_000, 0, deadline);
+        vm.stopPrank();
+    }
+
+    function test_fork_zapCloseWithoutPositionReverts() public onFork {
+        vm.prank(user);
+        vm.expectRevert(GambLeverageZap.NoPosition.selector);
+        zap.closeLeveragedPosition(0, block.timestamp + 1 hours);
+    }
+
+    function test_fork_zapPauseBlocksOpeningButNeverClosing() public onFork {
+        _dealWbnb(user, 1e18);
+        _dealWbnb(address(this), 100e18);
+        _pokeOracle();
+
+        vm.startPrank(address(this));
+        wbnb.approve(address(lendingPool), type(uint256).max);
+        lendingPool.supply(50e18);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        wbnb.approve(address(zap), type(uint256).max);
+        lendingPool.approveOperator(address(zap));
+        vm.stopPrank();
+
+        uint256 deadline = block.timestamp + 1 hours;
+        vm.prank(user);
+        zap.openLeveragedPosition(1e15, 11_000, 0, deadline);
+
+        zap.setOpeningPaused(true);
+
+        vm.startPrank(user);
+        vm.expectRevert(GambLeverageZap.OpeningIsPaused.selector);
+        zap.openLeveragedPosition(1e15, 11_000, 0, deadline);
+        vm.stopPrank();
+
+        vm.prank(user);
+        zap.closeLeveragedPosition(0, block.timestamp + 1 hours);
+        (uint256 debtAfter,, uint256 sharesAfter) = lendingPool.borrowers(user);
+        assertEq(debtAfter, 0, "closing must survive the open-pause");
+        assertEq(sharesAfter, 0, "collateral must come back");
+    }
+
+    /// @dev The oracle must fail closed: once the keeper stops poking, the
+    ///      price ages out and every consumer reverts instead of trading on a
+    ///      stale number. A later poke revives it.
+    function test_fork_oracleFailsClosedWhenTheKeeperStops() public onFork {
+        _pokeOracle();
+        assertFalse(oracle.isStale(), "fresh after a poke");
+        assertGt(oracle.gambPriceInWbnbWad(), 0, "the price must be available");
+
+        vm.warp(block.timestamp + oracle.MAX_STALENESS() + 1);
+        assertTrue(oracle.isStale(), "the oracle must age out");
+
+        vm.expectRevert(GambTwapOracle.OracleStale.selector);
+        oracle.gambPriceInWbnbWad();
+        vm.expectRevert(GambTwapOracle.OracleStale.selector);
+        oracle.fairValueOfLpInWbnb(1e18);
+
+        // The keeper comes back and revives it.
+        _pokeOracle();
+        assertFalse(oracle.isStale(), "a poke must revive the oracle");
     }
 
     // ------------------------------------------------------------------
