@@ -77,6 +77,20 @@ fork-test-v2`).
 > e um teste com mocks e números redondos (1e18, 30 dias) produz truncamentos
 > simétricos e esconde o erro. O fork usa os juros reais do MasterChef legado.
 
+## Achados de revisão manual
+
+Nem todo risco de segurança aparece num analisador estático. Estes sao de revisão
+manual do código, e nenhum dos dois detectaria.
+
+| # | Sev | Local | Achado | Correção |
+| --- | --- | --- | --- | --- |
+| M1 | **Alta** | `GambLendingPool.borrow` / `.withdrawCollateral` | A delegação de operator era **sem escopo**: um operator aprovado pelo borrower podia emprestar em nome dele mandando o WBNB para qualquer endereço, e retirar o colateral dele para qualquer endereço (so limitado pelo LTV, que deixava a posição em 40% — o máximo de risco). Um operator é um contrato; comprometido, drenava o WBNB e o colateral de todo borrower que já o aprovou | Operator só pode emprestar para as próprias mãos (`OperatorCannotBorrowForOthers`) e só retira colateral de posição sem dívida, também para as próprias mãos (`OperatorCannotActOnLiveDebt`, `OperatorCannotWithdrawCollateral`). O borrower mantém controle total |
+| M2 | Média | `GambVault.emergencyExitMasterChef` | O caminho de resgate chamava `emergencyWithdraw` direto, que **renuncia** as recompensas acumuladas por design — o último recurso queimava a recompensa dos depositantes | Coleta e recompõe as recompensas primeiro, dentro de um único `try` (sem fee, sem incentivo de caller: no resgate, todo o valor é dos depositantes). Se o MasterChef ou o router estiverem quebrados, o bloco reverte atomicamente e o resgate segue. Regressão: `test_emergencyExitRecoversPendingRewards`, `test_emergencyExitStillWorksWhenTheMasterChefCannotPayOut` |
+
+> **M1 é o achado mais grave de toda a revisão.** A delegação existia para o
+> zap poder agir pelo usuário; ela dava, na verdade, poder de saque. O
+> escopo agora é explícito na NatSpec de `approveOperator`.
+
 ## Triage — Aderyn
 
 ### H-1: Reentrancy — state change after external call (falso positivo)
