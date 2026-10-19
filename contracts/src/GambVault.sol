@@ -78,6 +78,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     event SlippageUpdated(uint256 newSlippageBps);
     event DepositsPausedSet(bool paused);
     event EmergencyExit(uint256 lpRecovered);
+    event EmergencyRewardsRecovered(uint256 gambRecovered);
     event RescuedToken(address indexed token, uint256 amount, address indexed to);
 
     // ---------------------------------------------------------------------
@@ -219,8 +220,24 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
             return 0;
         }
 
-        uint256 half = toCompound / 2;
-        uint256 otherHalf = toCompound - half;
+        uint256 liquidity = _swapAndAddLiquidity(toCompound, deadline);
+
+        if (liquidity < minLpOut) revert SlippageExceeded();
+
+        _stakeIdleBalance();
+        lpCompounded = liquidity;
+
+        emit Harvested(msg.sender, gambBalance, feeAmount, callerReward, lpCompounded);
+    }
+
+    /// @notice Swaps half of `gambToCompound` for WBNB and adds the liquidity.
+    /// @dev Shared by the normal harvest and by the emergency exit, which
+    ///      compounds the recovered rewards without taking any fee — on a
+    ///      rescue, all the recovered value belongs to the depositors.
+    ///      Does NOT stake the result; callers decide.
+    function _swapAndAddLiquidity(uint256 gambToCompound, uint256 deadline) internal returns (uint256 liquidity) {
+        uint256 half = gambToCompound / 2;
+        uint256 otherHalf = gambToCompound - half;
 
         address[] memory path = new address[](2);
         path[0] = address(gamb);
@@ -241,7 +258,7 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
         gamb.forceApprove(address(router), gambForLp);
         wbnb.forceApprove(address(router), wbnbReceived);
 
-        (,, uint256 liquidity) = router.addLiquidity(
+        (,, liquidity) = router.addLiquidity(
             address(gamb),
             address(wbnb),
             gambForLp,
@@ -251,13 +268,6 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
             address(this),
             deadline
         );
-
-        if (liquidity < minLpOut) revert SlippageExceeded();
-
-        _stakeIdleBalance();
-        lpCompounded = liquidity;
-
-        emit Harvested(msg.sender, gambBalance, feeAmount, callerReward, lpCompounded);
     }
 
     function _quoteOut(uint256 amountIn, address[] memory path) internal view returns (uint256) {
@@ -308,12 +318,35 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     }
 
     /// @notice Rescue path if the upstream MasterChef, router, or LP pair ever
-    ///         looks compromised/stuck: forfeits any unharvested GAMB rewards
-    ///         and pulls all staked LP back into the vault's own balance.
+    ///         looks compromised/stuck: pulls all staked LP back into the
+    ///         vault's own balance.
     ///         After this, withdrawals keep working (assets still back shares
     ///         1:1 against the vault's idle LP balance); harvest() is disabled.
-    function emergencyExitMasterChef() external onlyOwner {
+    /// @dev Pending GAMB rewards are recovered FIRST, while the MasterChef
+    ///      still answers: `emergencyWithdraw` forfeits them by design, so
+    ///      skipping the recovery would silently burn the depositors' accrued
+    ///      rewards on every rescue. The recovered GAMB is compounded straight
+    ///      back into LP, with no fee and no caller incentive — on a rescue,
+    ///      every wei of recovered value belongs to the depositors.
+    ///      The whole attempt lives in one try block on purpose: if the router
+    ///      is broken too, the attempt is rolled back atomically and the
+    ///      rescue still goes through, because the rescue is the path of last
+    ///      resort and must not be blocked by a broken swap.
+    function emergencyExitMasterChef() external onlyOwner nonReentrant {
         if (emergencyExited) revert AlreadyExited();
+
+        try masterChef.deposit(pid, 0) {
+            uint256 collected = gamb.balanceOf(address(this));
+            if (collected >= 2) {
+                _swapAndAddLiquidity(collected, block.timestamp);
+            }
+            emit EmergencyRewardsRecovered(collected);
+        } catch {
+            // The MasterChef could not pay out, or the router could not
+            // compound the rewards. Either way there is nothing to recover and
+            // the rescue continues.
+        }
+
         emergencyExited = true;
         uint256 before = IERC20(asset()).balanceOf(address(this));
         masterChef.emergencyWithdraw(pid);

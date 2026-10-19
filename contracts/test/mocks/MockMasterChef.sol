@@ -18,6 +18,7 @@ contract MockMasterChef is IGambMasterChef {
 
     mapping(uint256 => mapping(address => uint256)) internal staked;
     mapping(uint256 => mapping(address => uint256)) internal pending;
+    bool internal depositReverts;
 
     constructor(address lpToken_) {
         lpToken = lpToken_;
@@ -81,6 +82,7 @@ contract MockMasterChef is IGambMasterChef {
 
     /// @dev `deposit(pid, 0)` is the MasterChef idiom for "just harvest".
     function deposit(uint256 pid, uint256 amount) external {
+        if (depositReverts) revert("MasterChef is broken");
         if (amount > 0) {
             staked[pid][msg.sender] += amount;
             IERC20(lpToken).transferFrom(msg.sender, address(this), amount);
@@ -103,6 +105,12 @@ contract MockMasterChef is IGambMasterChef {
         if (amount > 0) {
             IERC20(lpToken).transfer(msg.sender, amount);
         }
+    }
+
+    /// @dev Simulates the MasterChef being the thing that is broken: every
+    ///      deposit (including the harvest idiom) reverts.
+    function setDepositReverts(bool reverts_) external {
+        depositReverts = reverts_;
     }
 
     function _payPending(uint256 pid, address user) internal {

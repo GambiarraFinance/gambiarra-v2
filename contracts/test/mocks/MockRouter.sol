@@ -55,7 +55,10 @@ contract MockRouter is IPancakeRouter02 {
         IERC20(path[0]).transferFrom(msg.sender, address(this), amountIn);
         uint256 amountOut = (amountIn * rateWad) / 1e18;
         require(amountOut >= amountOutMin, "INSUFFICIENT_OUTPUT_AMOUNT");
-        IERC20(path[1]).transfer(to, amountOut);
+        // The router is a liquidity hub, not a holder of one pair: it pays
+        // out of inventory. Minting models that without the test having to
+        // pre-fund the router with every token it might route.
+        MockERC20(path[1]).mint(to, amountOut);
     }
 
     function addLiquidity(
@@ -100,7 +103,7 @@ contract MockRouter is IPancakeRouter02 {
         require(amountB >= amountBMin, "INSUFFICIENT_B_AMOUNT");
 
         lpToken.burn(msg.sender, liquidity);
-        IERC20(tokenA).transfer(to, amountA);
-        IERC20(tokenB).transfer(to, amountB);
+        MockERC20(tokenA).mint(to, amountA);
+        MockERC20(tokenB).mint(to, amountB);
     }
 }
