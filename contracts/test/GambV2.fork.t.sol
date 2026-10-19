@@ -888,6 +888,26 @@ contract GambV2ForkTest is Test {
         assertFalse(oracle.isStale(), "a poke must revive the oracle");
     }
 
+    /// @dev Guards the exact sequence `script/Keeper.s.sol` runs — best-effort
+    ///      poke, then harvest — so an API drift in either contract breaks a
+    ///      test instead of silently breaking the keeper in production.
+    function test_fork_keeperPassPokesAndHarvests() public onFork {
+        _dealLp(user, 100e18);
+        vm.startPrank(user);
+        lp.approve(address(vault), type(uint256).max);
+        vault.deposit(100e18, user);
+        vm.stopPrank();
+
+        vm.roll(block.number + 1_000);
+        vm.warp(block.timestamp + 1 hours);
+
+        try oracle.poke() {} catch {}
+        assertFalse(oracle.isStale(), "the keeper must leave a usable price");
+
+        uint256 compounded = vault.harvest(0, block.timestamp + 1 hours);
+        assertGt(compounded, 0, "the keeper must compound real rewards");
+    }
+
     // ------------------------------------------------------------------
     // helpers
     // ------------------------------------------------------------------
