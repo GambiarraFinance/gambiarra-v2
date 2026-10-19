@@ -10,7 +10,7 @@ BSC_RPC_URL ?= https://bsc-mainnet.public.blastapi.io
 FORK_BLOCK ?=
 ANVIL_FLAGS ?= --chain-id 56 --host 127.0.0.1 --port 8545
 
-.PHONY: build test fmt fmt-check fork fork-test clean
+.PHONY: build test fmt fmt-check fork fork-test fork-test-v2 keeper clean
 
 build:
 	forge build
@@ -36,6 +36,15 @@ fork-test:
 # Precisa de um nó ARCHIVE, porque o bloco é fixado para reprodutibilidade.
 fork-test-v2:
 	BSC_RPC_URL="$(BSC_RPC_URL)" forge test --match-contract GambV2ForkTest -vvv
+
+# Uma passada do keeper (permissionless): poke no oráculo + harvest do vault.
+# Precisa de ORACLE_ADDRESS (e, opcionalmente, VAULT_ADDRESS) e KEEPER_PRIVATE_KEY.
+# Rode por cron a cada 30-120 min enquanto o par GAMB/WBNB estiver dormente.
+keeper:
+	ORACLE_ADDRESS="$(ORACLE_ADDRESS)" VAULT_ADDRESS="$(VAULT_ADDRESS)" \
+	KEEPER_PRIVATE_KEY="$(KEEPER_PRIVATE_KEY)" \
+	forge script script/Keeper.s.sol:Keeper --rpc-url "$(BSC_RPC_URL)" \
+	$(if $(FORK_BLOCK),--fork-block-number $(FORK_BLOCK),) --broadcast
 
 clean:
 	forge clean
