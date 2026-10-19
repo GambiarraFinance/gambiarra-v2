@@ -38,7 +38,11 @@ dele é a que o zap assume.
    mudança de dívida no lending.
 4. **LTV e liquidação.** Default 40% LTV / 50% threshold. Liquidação é
    permissionless. Não adicione allowlist nem bônus de liquidação acima do
-   configurado.
+   configurado. **Uma liquidação quita no máximo 50% da dívida**
+   (`MAX_CLOSE_FACTOR_BPS`): quem liquida precisa repetir em rodadas até a
+   posição ficar saudável, e a posição fica saudável antes disso (o bônus
+   desalavanca). Posições com dívida abaixo de `DUST_DEBT` são liquidadas
+   em uma chamada só, para o close factor nunca deixar dívida irrecuperável.
 5. **Oráculo falha fechado.** Preço velho/insuficiente reverte. Nunca use spot
    como fallback silencioso. A janela mínima é 30 min e o fair value do LP é
    geométrico.

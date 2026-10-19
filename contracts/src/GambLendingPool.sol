@@ -36,6 +36,11 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
     uint256 public constant MAX_LIQUIDATION_THRESHOLD_BPS = 8_000; // hard cap 80%
     uint256 public constant MAX_RESERVE_FACTOR_BPS = 2_000; // hard cap 20%
     uint256 public constant MAX_LIQUIDATION_BONUS_BPS = 1_500; // hard cap 15%
+    /// @dev Maximum share of a position's debt that ONE liquidation may repay.
+    uint256 public constant MAX_CLOSE_FACTOR_BPS = 5_000; // 50%
+    /// @dev Positions at or below this debt are liquidated in a single call,
+    ///      so the close factor can never leave dust bad debt behind.
+    uint256 public constant DUST_DEBT = 1e12;
     uint256 public constant LTV_SAFETY_BUFFER_BPS = 500; // maxLtv must stay >=5% below liq. threshold
     /// @dev bps (1e4) -> wad-per-year (1e18): multiply by 1e14.
     uint256 private constant BPS_TO_WAD_PER_YEAR = 1e14;
@@ -394,7 +399,15 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         uint256 debt = _currentDebt(info);
         if (healthFactor(borrower) >= 1e18) revert NotUndercollateralized();
 
-        actualRepaid = repayAmount > debt ? debt : repayAmount;
+        // Close factor: one liquidation may repay at most half of the debt.
+        // The liquidator receives vault shares, not the LP, so it is exposed
+        // to the collateral's price for the whole position it takes — a
+        // sandwich around a full liquidation can make the seizure worth less
+        // than the repayment. Bounding the debt per round bounds that
+        // exposure. A position whose debt is already dust is cleared in one
+        // go, so the close factor can never strand bad debt.
+        uint256 maxRepay = debt <= DUST_DEBT ? debt : Math.mulDiv(debt, MAX_CLOSE_FACTOR_BPS, MAX_BPS);
+        actualRepaid = repayAmount > maxRepay ? maxRepay : repayAmount;
         wbnb.safeTransferFrom(msg.sender, address(this), actualRepaid);
 
         info.principal = debt - actualRepaid;

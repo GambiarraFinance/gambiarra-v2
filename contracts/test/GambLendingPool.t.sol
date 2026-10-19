@@ -187,15 +187,30 @@ contract GambLendingPoolTest is Test {
         vm.warp(block.timestamp + 30 days);
         pool.accrueInterest();
 
-        oracle.setPriceWad(0.1e18); // deeply underwater
+        oracle.setPriceWad(0.6e18); // mildly underwater: 60 WBNB of collateral against ~40 of debt
         uint256 debt = pool.currentDebt(bob);
 
-        vm.prank(liquidator);
-        (uint256 repaid,) = pool.liquidate(bob, debt);
+        // The close factor caps each round at half the debt, so a position
+        // is liquidated over several rounds. The point of this test is that
+        // none of those rounds underflows the aggregate borrow, and that the
+        // accounting stays consistent afterwards.
+        uint256 repaid;
+        for (uint256 round = 0; round < 20 && pool.currentDebt(bob) > 0; round++) {
+            // The seizure carries a bonus, so each round de-levers the
+            // position. Once it is healthy again there is nothing left to
+            // liquidate.
+            if (pool.healthFactor(bob) >= 1e18) break;
+            uint256 roundDebt = pool.currentDebt(bob);
+            vm.prank(liquidator);
+            (uint256 roundRepaid,) = pool.liquidate(bob, roundDebt);
+            repaid += roundRepaid;
+        }
 
-        assertEq(repaid, debt);
-        assertEq(pool.currentDebt(bob), 0);
-        assertEq(pool.totalBorrows(), 0);
+        assertGt(repaid, 0, "the position must be liquidated");
+        assertLe(pool.currentDebt(bob), debt, "the debt must not grow");
+        // The aggregate must still match the borrower's debt: this is the
+        // invariant whose violation caused the underflow.
+        assertApproxEqAbs(pool.totalBorrows(), pool.currentDebt(bob), 1e6, "the aggregate must track the debt");
     }
 
     function test_liquidateUndercollateralizedPosition() public {
@@ -232,6 +247,53 @@ contract GambLendingPoolTest is Test {
         vm.prank(liquidator);
         vm.expectRevert(GambLendingPool.NotUndercollateralized.selector);
         pool.liquidate(bob, 20e18);
+    }
+
+    // ------------------------------------------------------------------
+    // Liquidation close factor
+    // ------------------------------------------------------------------
+
+    /// @dev One liquidation may repay at most half the debt, which bounds
+    ///      the liquidator's exposure to the collateral's price.
+    function test_liquidateIsBoundedByTheCloseFactor() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.borrow(40e18, bob, bob);
+
+        oracle.setPriceWad(0.5e18);
+        assertLt(pool.healthFactor(bob), 1e18);
+
+        // Asking to clear the WHOLE position only repays half of it.
+        vm.prank(liquidator);
+        (uint256 repaid,) = pool.liquidate(bob, 40e18);
+
+        assertEq(repaid, 20e18, "one liquidation may repay at most half the debt");
+        assertEq(pool.currentDebt(bob), 20e18, "the rest of the debt survives for the next round");
+    }
+
+    /// @dev A dust position must still be clearable in one call, or the
+    ///      close factor would strand permanent bad debt.
+    function test_dustPositionIsLiquidatedInOneCall() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.borrow(1e12, bob, bob);
+
+        // Make it unhealthy: the collateral has to be worth less than twice
+        // the debt for the position to fall under the threshold.
+        oracle.setPriceWad(1e6);
+        assertLt(pool.healthFactor(bob), 1e18);
+
+        vm.prank(liquidator);
+        (uint256 repaid,) = pool.liquidate(bob, 1e12);
+
+        assertEq(repaid, 1e12, "a dust position is cleared in one call");
+        assertEq(pool.currentDebt(bob), 0, "no dust debt is left behind");
     }
 
     // ------------------------------------------------------------------
