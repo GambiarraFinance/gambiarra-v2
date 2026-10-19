@@ -233,4 +233,122 @@ contract GambLendingPoolTest is Test {
         vm.expectRevert(GambLendingPool.NotUndercollateralized.selector);
         pool.liquidate(bob, 20e18);
     }
+
+    // ------------------------------------------------------------------
+    // Operator delegation is scoped
+    // ------------------------------------------------------------------
+    //
+    // An operator is a contract acting for the borrower (today: the leverage
+    // zap). An unscoped delegation is a drain: "borrow for the user and send
+    // the money anywhere" or "withdraw the user's collateral to anywhere"
+    // means a compromised operator empties every borrower who ever approved
+    // it. The operator may only act into its own hands, and may only pull
+    // collateral out of a position that carries no debt.
+
+    function test_operatorCannotBorrowToAThirdParty() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.approveOperator(attacker);
+
+        // The operator may borrow, but only into its own hands. Sending it
+        // anywhere else is a drain of the borrower's credit line.
+        vm.prank(attacker);
+        vm.expectRevert(GambLendingPool.OperatorCannotBorrowForOthers.selector);
+        pool.borrow(10e18, bob, liquidator);
+    }
+
+    function test_operatorCanBorrowIntoItsOwnHands() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.approveOperator(attacker);
+
+        vm.prank(attacker);
+        pool.borrow(10e18, bob, attacker);
+
+        assertEq(wbnb.balanceOf(attacker), 100e18 + 10e18, "the operator keeps the WBNB it borrowed");
+        assertEq(pool.currentDebt(bob), 10e18, "the debt is the borrower's");
+    }
+
+    function test_operatorCannotWithdrawCollateralToAThirdParty() public {
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.approveOperator(attacker);
+
+        vm.prank(attacker);
+        vm.expectRevert(GambLendingPool.OperatorCannotWithdrawCollateral.selector);
+        pool.withdrawCollateral(50e18, bob, liquidator);
+    }
+
+    function test_operatorCannotWithdrawCollateralWhileDebtIsLive() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.borrow(40e18, bob, bob);
+
+        vm.prank(bob);
+        pool.approveOperator(attacker);
+
+        // The operator may not take the collateral out from under a live debt
+        // — not even into its own hands.
+        vm.prank(attacker);
+        vm.expectRevert(GambLendingPool.OperatorCannotActOnLiveDebt.selector);
+        pool.withdrawCollateral(50e18, bob, attacker);
+    }
+
+    function test_operatorCanWithdrawCollateralAfterTheDebtIsCleared() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.borrow(40e18, bob, bob);
+
+        vm.prank(bob);
+        pool.approveOperator(attacker);
+
+        // Repay, then the operator may pull the collateral to itself: this is
+        // exactly what closing a position looks like.
+        vm.startPrank(bob);
+        wbnb.approve(address(pool), type(uint256).max);
+        pool.repay(pool.currentDebt(bob), bob);
+        vm.stopPrank();
+
+        vm.prank(attacker);
+        pool.withdrawCollateral(100e18, bob, attacker);
+
+        assertEq(vault.balanceOf(attacker), 100e18, "the operator received the collateral");
+        (,, uint256 remainingShares) = pool.borrowers(bob);
+        assertEq(remainingShares, 0, "the position is closed");
+    }
+
+    function test_borrowerKeepsFullControlOverItsOwnCollateral() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.borrow(30e18, bob, bob);
+
+        // The borrower may still borrow into any address it chooses.
+        vm.prank(bob);
+        pool.borrow(1e18, bob, bob);
+        assertEq(wbnb.balanceOf(bob), 1_000e18 + 31e18);
+
+        // And may withdraw its own collateral, subject to the LTV check.
+        vm.prank(bob);
+        pool.withdrawCollateral(10e18, bob, bob);
+        assertEq(vault.balanceOf(bob), 10e18, "the withdrawn collateral came back to the borrower");
+        (,, uint256 posted) = pool.borrowers(bob);
+        assertEq(posted, 90e18, "the rest is still posted as collateral");
+    }
 }

@@ -113,6 +113,9 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
     error NotUndercollateralized();
     error RiskParamOutOfRange();
     error ZeroAddress();
+    error OperatorCannotBorrowForOthers();
+    error OperatorCannotWithdrawCollateral();
+    error OperatorCannotActOnLiveDebt();
     error RateModelOutOfRange();
 
     constructor(IERC20 wbnb_, IGambVault vault_, IGambTwapOracle oracle_, address initialOwner) Ownable(initialOwner) {
@@ -126,6 +129,17 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
     // ---------------------------------------------------------------------
     // Operator approvals (Aave-style "onBehalfOf" delegation, scoped to this
     // contract only — never a blanket token allowance).
+    //
+    // The delegation is deliberately NARROW, because an operator is a
+    // contract and a contract can be compromised. What an operator may do:
+    //   - borrow, but only into its own hands;
+    //   - withdraw collateral, but only from a position with no debt left
+    //     (i.e. closing it) and only into its own hands;
+    //   - repay the borrower's debt (repay is permissionless anyway).
+    // What it may NOT do: send the borrower's WBNB anywhere, or pull the
+    // borrower's collateral out from under a live debt. Without those bounds,
+    // one compromised operator would drain every borrower who ever approved
+    // it. See `borrow()` and `withdrawCollateral()`.
     // ---------------------------------------------------------------------
 
     function approveOperator(address operator) external {
@@ -251,14 +265,31 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         emit CollateralDeposited(onBehalfOf, msg.sender, vaultShareAmount);
     }
 
+    /// @notice Removes vault shares posted as collateral.
+    /// @dev The operator delegation is deliberately NARROW. An operator is a
+    ///      contract acting for the borrower (today: the leverage zap), and an
+    ///      unscoped "withdraw anyone's collateral to any address" is a drain
+    ///      waiting for a compromised operator: every borrower who ever
+    ///      approved one would be drained in a single call.
+    ///      So an operator may ONLY pull collateral when the position carries
+    ///      no debt — that is, as part of closing it — and only into its own
+    ///      hands. While there is debt outstanding, only the borrower may
+    ///      reduce their own collateral, and the usual LTV check still
+    ///      applies on top.
     function withdrawCollateral(uint256 vaultShareAmount, address onBehalfOf, address to) external nonReentrant {
         _checkAuthorized(onBehalfOf);
         accrueInterest();
 
         BorrowerInfo storage info = borrowers[onBehalfOf];
+        uint256 debt = _currentDebt(info);
+
+        if (msg.sender != onBehalfOf) {
+            if (debt > 0) revert OperatorCannotActOnLiveDebt();
+            if (to != msg.sender) revert OperatorCannotWithdrawCollateral();
+        }
+
         info.collateralShares -= vaultShareAmount; // reverts on underflow
 
-        uint256 debt = _currentDebt(info);
         if (debt > 0) {
             uint256 remainingCollateralValue = _collateralValueInWbnb(info.collateralShares);
             if ((remainingCollateralValue * maxLtvBps) / MAX_BPS < debt) revert ExceedsLtv();
@@ -268,9 +299,17 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         emit CollateralWithdrawn(onBehalfOf, to, vaultShareAmount);
     }
 
+    /// @notice Borrows WBNB against the caller's posted collateral.
+    /// @dev Same scoping rule as `withdrawCollateral`: an operator may only
+    ///      borrow into its OWN hands. "Borrow on the user's behalf and send
+    ///      the money anywhere" is exactly the power that turns a compromised
+    ///      operator into a drain of every borrower who approved it. The
+    ///      leverage zap legitimately needs this: it borrows to itself to pay
+    ///      the flash principal back to the pair.
     function borrow(uint256 wbnbAmount, address onBehalfOf, address to) external nonReentrant {
         if (borrowingPaused) revert BorrowingIsPaused();
         _checkAuthorized(onBehalfOf);
+        if (msg.sender != onBehalfOf && to != msg.sender) revert OperatorCannotBorrowForOthers();
         accrueInterest();
 
         uint256 cash = wbnb.balanceOf(address(this));
