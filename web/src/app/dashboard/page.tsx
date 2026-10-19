@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { connection } from "next/server";
-import { ADDRESSES, CHAIN, CONTRACTS, getLegacyStats, sourceLabel } from "@/lib/protocol";
+import { ADDRESSES, CHAIN, CONTRACTS, DEPLOY_FACTS, getLegacyStats, sourceLabel } from "@/lib/protocol";
 import { formatScientific } from "@/lib/format";
 import { WalletPanel } from "@/components/WalletPanel";
 
@@ -196,6 +196,46 @@ export default async function DashboardPage() {
               <p className="mt-1 text-xs text-sand/60">
                 Foundry · + 16 fork tests contra a BSC real (gated por BSC_RPC_URL)
               </p>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-sand/20 bg-sand/5 p-4">
+              <p className="font-mono text-[11px] uppercase tracking-widest text-sun">
+                fatos de deploy
+              </p>
+              <dl className="mt-3 space-y-2 text-xs leading-relaxed text-sand/70">
+                <div>
+                  <dt className="font-semibold text-sand">Venue do par</dt>
+                  <dd>
+                    {DEPLOY_FACTS.lpVenue} — o Router V2 não o roteia e todo
+                    addLiquidity reverteria.
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-sand">Pool do MasterChef</dt>
+                  <dd>
+                    pid {DEPLOY_FACTS.pid} (paga 3x o allocPoint do 16).
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-sand">Oráculo</dt>
+                  <dd>
+                    O par está dormente: a janela TWAP só avança com um poke()
+                    sem impacto de preço. Sem keeper, o lending pool para de
+                    emprestar.
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-sand">Multicall3</dt>
+                  <dd>Não agrega nada em nome do usuário na BSC.</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold text-sand">Capacidade</dt>
+                  <dd>
+                    O par tem ~0,24 WBNB de reserva — a capacidade de crédito é
+                    do tamanho da poeira.
+                  </dd>
+                </div>
+              </dl>
             </div>
           </section>
         </div>

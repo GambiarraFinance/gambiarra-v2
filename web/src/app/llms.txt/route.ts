@@ -1,4 +1,13 @@
-import { ADDRESSES, CHAIN, CONTRACTS, GITHUB_URL, SITE_URL, getLegacyStats, sourceLabel } from "@/lib/protocol";
+import {
+  ADDRESSES,
+  CHAIN,
+  CONTRACTS,
+  DEPLOY_FACTS,
+  GITHUB_URL,
+  SITE_URL,
+  getLegacyStats,
+  sourceLabel,
+} from "@/lib/protocol";
 
 export async function GET() {
   const legacy = await getLegacyStats();
@@ -31,6 +40,37 @@ Fatos lidos agora (${sourceLabel(legacy.source)}):
 
 Armadilha conhecida: o mesmo par GAMB/WBNB aparece nos pools 16 e 25 com
 pesos diferentes. Nunca assuma uma relação 1:1 entre LP token e pool id.
+
+## Fatos de deploy (verificados on-chain, fork BSC bloco 128620982)
+
+Estes fatos não aparecem em nenhuma análise estática e mudam o que dá para
+fazer. Trate-os como parte do contrato, não como curiosidade.
+
+- O par GAMB/WBNB é um par **PancakeSwap V1** (factory
+  ${DEPLOY_FACTS.lpFactory}). A factory do PancakeSwap V2 devolve address(0)
+  para (WBNB, GAMB), então o Router V2 (${DEPLOY_FACTS.routerV2DoesNotRoute})
+  **não roteia** este par: todo addLiquidity, removeLiquidity e swap reverte.
+  O router que o roteia é o V1 Router02 ${DEPLOY_FACTS.router}.
+- O par de flash do zap é PancakeSwap **V2** (${DEPLOY_FACTS.flashPair},
+  WBNB/BUSD) de propósito: a fee de 0,25% dele é a que o zap assume. A venue
+  do flash é independente da venue do LP.
+- O pool do MasterChef onde o vault faz stake é o **${DEPLOY_FACTS.pid}** (paga
+  3x o allocPoint do 16).
+- A fee real de swap do par V1 é **${DEPLOY_FACTS.lpSwapFeeBps} bps (0,2%)**,
+  medida no pool vivo, não presumida.
+- **O par está dormente.** O acumulador de preço do TWAP só avança quando o par
+  é tocado, então o oráculo precisa de ${DEPLOY_FACTS.oracleNeedsKeeper ? "GambTwapOracle.poke()" : "poke()"}
+  — permissionless e sem impacto de preço — pelo menos a cada
+  ${DEPLOY_FACTS.oracleMinPeriodSeconds / 60} minutos. Sem isso o preço
+  envelhece e o lending pool para de emprestar.
+- **O Multicall3 na BSC não agrega por conta do usuário.** Ele roda as inner
+  calls com ele mesmo como msg.sender, então allowance de token, aprovação de
+  operator e abertura de posição não podem ser batched em nome de ninguém. Para
+  abrir posição em uma transação só, o caminho é autorização por assinatura
+  (EIP-712), não multicall.
+- A capacidade de crédito do protocolo é do tamanho da poeira: o par tem
+  ~0,24 WBNB de reserva. Isto é uma demonstração técnica, não um produto com
+  liquidez.
 
 ## Contratos novos (ainda NÃO deployados, sem fundos)
 

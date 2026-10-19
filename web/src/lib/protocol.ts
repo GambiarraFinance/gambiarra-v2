@@ -281,6 +281,33 @@ export const CONTRACTS = [
   },
 ] as const;
 
+/**
+ * Fatos de deploy que nenhuma análise estática detecta. Verificados com `cast`
+ * em 2026-10-19 (fork BSC, bloco 128620982). Fonte única: `/llms.txt` e
+ * `/agents.json` derivam daqui.
+ */
+export const DEPLOY_FACTS = {
+  /** O par GAMB/WBNB é PancakeSwap V1. */
+  lpVenue: "PancakeSwap V1",
+  lpFactory: "0xBCfCcbde45cE874adCB698cC183deBcF17952812",
+  /** O Router V2 não roteia este par (a factory V2 não o tem): todo addLiquidity reverte. */
+  router: "0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F",
+  routerV2DoesNotRoute: "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+  /** Par de flash do zap: PancakeSwap V2 WBNB/BUSD; a fee de 0,25% dele é a que o zap assume. */
+  flashPair: "0x58F876857a02D6762E0101bb5C46A8c1ED44Dc16",
+  /** Pool do MasterChef onde o vault faz stake: o 25 paga 3x o allocPoint do 16. */
+  pid: 25,
+  /** O par está dormente: o TWAP só anda com um poke() (sem impacto de preço), a cada 30 min. */
+  oracleNeedsKeeper: true,
+  oracleMinPeriodSeconds: 1_800,
+  oracleMaxStalenessSeconds: 7_200,
+  /** Na BSC o Multicall3 roda as inner calls como ele mesmo: não agrega nada que dependa do usuário. */
+  multicall3: "0xcA11bde05977b3631167028862bE2a173976CA11",
+  multicall3CannotBatchUserIdentity: true,
+  /** Medido no pool vivo. */
+  lpSwapFeeBps: 20,
+} as const;
+
 export const AGENT_ENDPOINTS = [
   {
     path: "/llms.txt",

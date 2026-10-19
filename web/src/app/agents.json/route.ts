@@ -3,6 +3,7 @@ import {
   ADDRESSES,
   CHAIN,
   CONTRACTS,
+  DEPLOY_FACTS,
   GITHUB_URL,
   REPO_URL,
   SITE_URL,
@@ -75,6 +76,21 @@ export async function GET() {
         address: contract.address,
       })),
     },
+    deploy: {
+      lpVenue: DEPLOY_FACTS.lpVenue,
+      lpFactory: DEPLOY_FACTS.lpFactory,
+      router: DEPLOY_FACTS.router,
+      routerV2DoesNotRoute: DEPLOY_FACTS.routerV2DoesNotRoute,
+      flashPair: DEPLOY_FACTS.flashPair,
+      masterChefPid: DEPLOY_FACTS.pid,
+      lpSwapFeeBps: DEPLOY_FACTS.lpSwapFeeBps,
+      notes: [
+        "O par GAMB/WBNB é um par PancakeSwap V1. O Router V2 não o roteia: a factory V2 devolve address(0) e todo addLiquidity reverte.",
+        "O par de flash do zap é PancakeSwap V2 de propósito — a fee de 0,25% dele é a que o zap assume.",
+        "O par está dormente: a janela TWAP só avança com GambTwapOracle.poke(), que não tem impacto de preço. Sem um keeper, o lending pool para de emprestar.",
+        "O Multicall3 na BSC executa as inner calls como ele mesmo: não agrega allowance, aprovação de operator nem abertura de posição em nome do usuário. Para uma transação só, use autorização por assinatura.",
+      ],
+    },
     endpoints: [
       {
         path: "/llms.txt",
@@ -121,6 +137,10 @@ export async function GET() {
       withdrawalsPausable: false,
       depositsPausable: true,
       upgradeable: false,
+      oracleRequiresKeeper: DEPLOY_FACTS.oracleNeedsKeeper,
+      oracleMinPeriodSeconds: DEPLOY_FACTS.oracleMinPeriodSeconds,
+      oracleMaxStalenessSeconds: DEPLOY_FACTS.oracleMaxStalenessSeconds,
+      multicall3CannotBatchUserIdentity: DEPLOY_FACTS.multicall3CannotBatchUserIdentity,
     },
     agentDocs: {
       codingAgents: `${REPO_URL}/blob/main/AGENTS.md`,
