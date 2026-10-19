@@ -22,6 +22,7 @@ contracts/
   src/                 contratos v2 (GambVault, GambTwapOracle, GambLendingPool, GambLeverageZap)
   src/interfaces/      interfaces mínimas (inclui IGambMasterChef)
   script/              Deploy.s.sol + DeployLib.sol (endereços verificados, wiring)
+                       Keeper.s.sol (poke() + harvest(), permissionless)
   test/                Foundry tests + mocks
   test/GambLegacy.fork.t.sol  invariantes do legado contra fork da BSC
   test/GambV2.fork.t.sol      a v2 ponta a ponta contra a BSC real
@@ -50,6 +51,7 @@ forge fmt --check
 make fork        # anvil --fork-url $BSC_RPC_URL --chain-id 56
 make fork-test   # invariantes do MasterChef legado (precisa de BSC_RPC_URL)
 make fork-test-v2  # a v2 inteira contra a BSC real
+make keeper      # uma passada de poke() no oráculo + harvest() do vault
 ```
 
 > Os fork tests fixam o bloco, então exigem um RPC **archive** — os
@@ -95,7 +97,9 @@ mas não é o package manager do CI.
     imutável.
 12. **O oráculo TWAP precisa de keeper.** O par está dormente, então a janela só
     anda com `GambTwapOracle.poke()` — sem impacto de preço, mas alguém tem que
-    chamar. Sem isso o lending pool para de emprestar.
+    chamar. Sem isso o lending pool para de emprestar. O keeper permissionless
+    está em `script/Keeper.s.sol` (`make keeper`); ele também chama
+    `GambVault.harvest()`. Falta apenas agendar em produção.
 
 Antes de considerar uma mudança de contrato pronta:
 
