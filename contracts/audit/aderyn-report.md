@@ -59,105 +59,105 @@ Changing state after an external call can lead to re-entrancy attacks.Use the ch
 <details><summary>15 Found Instances</summary>
 
 
-- Found in src/GambLendingPool.sol [Line: 153](../src/GambLendingPool.sol#L153)
+- Found in src/GambLendingPool.sol [Line: 153](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L153)
 
 	State is changed at: `lastAccrualTimestamp = block.timestamp`, `totalBorrows = borrowsPrior + interestAccumulated`, `totalReserves += reservesDelta`, `borrowIndex += Math.mulDiv(Math.mulDiv(borrowIndex, rate, WAD), elapsed, 1)`
 	```solidity
 	        uint256 cash = wbnb.balanceOf(address(this));
 	```
 
-- Found in src/GambLendingPool.sol [Line: 222](../src/GambLendingPool.sol#L222)
+- Found in src/GambLendingPool.sol [Line: 222](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L222)
 
 	State is changed at: `supplyShares[msg.sender] -= shareAmount`, `totalSupplyShares -= shareAmount`
 	```solidity
 	        uint256 cash = wbnb.balanceOf(address(this));
 	```
 
-- Found in src/GambLendingPool.sol [Line: 264](../src/GambLendingPool.sol#L264)
+- Found in src/GambLendingPool.sol [Line: 264](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L264)
 
 	State is changed at: `info.principal = newDebt`, `info.indexSnapshot = borrowIndex`, `totalBorrows += wbnbAmount`
 	```solidity
 	        uint256 cash = wbnb.balanceOf(address(this));
 	```
 
-- Found in src/GambLendingPool.sol [Line: 408](../src/GambLendingPool.sol#L408)
+- Found in src/GambLendingPool.sol [Line: 408](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L408)
 
 	State is changed at: `totalReserves -= amount`
 	```solidity
 	        uint256 cash = wbnb.balanceOf(address(this));
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 142](../src/GambLeverageZap.sol#L142)
+- Found in src/GambLeverageZap.sol [Line: 142](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L142)
 
 	State is changed at: `flashPairWbnbIsToken0 = wbnbIsToken0`
 	```solidity
 	        bool wbnbIsToken0 = flashPair_.token0() == address(wbnb_);
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 143](../src/GambLeverageZap.sol#L143)
+- Found in src/GambLeverageZap.sol [Line: 143](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L143)
 
 	State is changed at: `flashPairWbnbIsToken0 = wbnbIsToken0`
 	```solidity
 	        require(wbnbIsToken0 || flashPair_.token1() == address(wbnb_), "flash pair has no WBNB");
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 48](../src/GambTwapOracle.sol#L48)
+- Found in src/GambTwapOracle.sol [Line: 48](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L48)
 
 	State is changed at: `pair = pair_`, `gamb = gamb_`, `wbnb = wbnb_`, `gambIsToken0 = isToken0`, `priceCumulativeLast = isToken0 ? pair_.price0CumulativeLast() : pair_.price1CumulativeLast()`, `blockTimestampLast = ts`
 	```solidity
 	        bool isToken0 = pair_.token0() == gamb_;
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 49](../src/GambTwapOracle.sol#L49)
+- Found in src/GambTwapOracle.sol [Line: 49](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L49)
 
 	State is changed at: `pair = pair_`, `gamb = gamb_`, `wbnb = wbnb_`, `gambIsToken0 = isToken0`, `priceCumulativeLast = isToken0 ? pair_.price0CumulativeLast() : pair_.price1CumulativeLast()`, `blockTimestampLast = ts`
 	```solidity
 	        if (!isToken0 && pair_.token1() != gamb_) revert PairAssetMismatch();
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 50](../src/GambTwapOracle.sol#L50)
+- Found in src/GambTwapOracle.sol [Line: 50](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L50)
 
 	State is changed at: `pair = pair_`, `gamb = gamb_`, `wbnb = wbnb_`, `gambIsToken0 = isToken0`, `priceCumulativeLast = isToken0 ? pair_.price0CumulativeLast() : pair_.price1CumulativeLast()`, `blockTimestampLast = ts`
 	```solidity
 	        if (isToken0 && pair_.token1() != wbnb_) revert PairAssetMismatch();
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 51](../src/GambTwapOracle.sol#L51)
+- Found in src/GambTwapOracle.sol [Line: 51](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L51)
 
 	State is changed at: `pair = pair_`, `gamb = gamb_`, `wbnb = wbnb_`, `gambIsToken0 = isToken0`, `priceCumulativeLast = isToken0 ? pair_.price0CumulativeLast() : pair_.price1CumulativeLast()`, `blockTimestampLast = ts`
 	```solidity
 	        if (!isToken0 && pair_.token0() != wbnb_) revert PairAssetMismatch();
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 58](../src/GambTwapOracle.sol#L58)
+- Found in src/GambTwapOracle.sol [Line: 58](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L58)
 
 	State is changed at: `blockTimestampLast = ts`
 	```solidity
 	        priceCumulativeLast = isToken0 ? pair_.price0CumulativeLast() : pair_.price1CumulativeLast();
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 59](../src/GambTwapOracle.sol#L59)
+- Found in src/GambTwapOracle.sol [Line: 59](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L59)
 
 	State is changed at: `blockTimestampLast = ts`
 	```solidity
 	        (,, uint32 ts) = pair_.getReserves();
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 66](../src/GambTwapOracle.sol#L66)
+- Found in src/GambTwapOracle.sol [Line: 66](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L66)
 
 	State is changed at: `priceCumulativeLast = priceCumulative`, `blockTimestampLast = blockTimestamp`, `priceAverageWad = Math.mulDiv(priceAverageQ112, WAD, Q112)`
 	```solidity
 	        uint256 priceCumulative = gambIsToken0 ? pair.price0CumulativeLast() : pair.price1CumulativeLast();
 	```
 
-- Found in src/GambTwapOracle.sol [Line: 67](../src/GambTwapOracle.sol#L67)
+- Found in src/GambTwapOracle.sol [Line: 67](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambTwapOracle.sol#L67)
 
 	State is changed at: `priceCumulativeLast = priceCumulative`, `blockTimestampLast = blockTimestamp`, `priceAverageWad = Math.mulDiv(priceAverageQ112, WAD, Q112)`
 	```solidity
 	        (,, uint32 blockTimestamp) = pair.getReserves();
 	```
 
-- Found in src/GambVault.sol [Line: 108](../src/GambVault.sol#L108)
+- Found in src/GambVault.sol [Line: 110](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L110)
 
 	State is changed at: `masterChef = masterChef_`, `pid = pid_`, `gamb = gamb_`, `wbnb = wbnb_`, `router = router_`, `feeRecipient = initialFeeRecipient`
 	```solidity
@@ -177,103 +177,103 @@ Contracts have owners with privileged rights to perform admin tasks and need to 
 <details><summary>17 Found Instances</summary>
 
 
-- Found in src/GambLendingPool.sol [Line: 30](../src/GambLendingPool.sol#L30)
+- Found in src/GambLendingPool.sol [Line: 30](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L30)
 
 	```solidity
 	contract GambLendingPool is Ownable2Step, ReentrancyGuard {
 	```
 
-- Found in src/GambLendingPool.sol [Line: 368](../src/GambLendingPool.sol#L368)
+- Found in src/GambLendingPool.sol [Line: 368](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L368)
 
 	```solidity
 	    ) external onlyOwner {
 	```
 
-- Found in src/GambLendingPool.sol [Line: 383](../src/GambLendingPool.sol#L383)
+- Found in src/GambLendingPool.sol [Line: 383](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L383)
 
 	```solidity
 	    function setInterestRateModel(uint256 baseRateBpsPerYear, uint256 multiplierBpsPerYear) external onlyOwner {
 	```
 
-- Found in src/GambLendingPool.sol [Line: 391](../src/GambLendingPool.sol#L391)
+- Found in src/GambLendingPool.sol [Line: 391](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L391)
 
 	```solidity
 	    function setBorrowingPaused(bool paused_) external onlyOwner {
 	```
 
-- Found in src/GambLendingPool.sol [Line: 405](../src/GambLendingPool.sol#L405)
+- Found in src/GambLendingPool.sol [Line: 405](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L405)
 
 	```solidity
 	    function withdrawReserves(uint256 amount, address to) external onlyOwner {
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 35](../src/GambLeverageZap.sol#L35)
+- Found in src/GambLeverageZap.sol [Line: 35](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L35)
 
 	```solidity
 	contract GambLeverageZap is IPancakeCallee, Ownable2Step, ReentrancyGuard {
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 378](../src/GambLeverageZap.sol#L378)
+- Found in src/GambLeverageZap.sol [Line: 378](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L378)
 
 	```solidity
 	    function setSwapSlippageBps(uint256 newSlippageBps) external onlyOwner {
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 385](../src/GambLeverageZap.sol#L385)
+- Found in src/GambLeverageZap.sol [Line: 385](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L385)
 
 	```solidity
 	    function setOpeningPaused(bool paused_) external onlyOwner {
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 393](../src/GambLeverageZap.sol#L393)
+- Found in src/GambLeverageZap.sol [Line: 393](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L393)
 
 	```solidity
 	    function rescueToken(address token, uint256 amount, address to) external onlyOwner {
 	```
 
-- Found in src/GambVault.sol [Line: 33](../src/GambVault.sol#L33)
+- Found in src/GambVault.sol [Line: 35](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L35)
 
 	```solidity
 	contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
 	```
 
-- Found in src/GambVault.sol [Line: 279](../src/GambVault.sol#L279)
+- Found in src/GambVault.sol [Line: 281](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L281)
 
 	```solidity
 	    function setFeeRecipient(address newRecipient) external onlyOwner {
 	```
 
-- Found in src/GambVault.sol [Line: 285](../src/GambVault.sol#L285)
+- Found in src/GambVault.sol [Line: 287](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L287)
 
 	```solidity
 	    function setPerformanceFeeBps(uint256 newFeeBps) external onlyOwner {
 	```
 
-- Found in src/GambVault.sol [Line: 291](../src/GambVault.sol#L291)
+- Found in src/GambVault.sol [Line: 293](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L293)
 
 	```solidity
 	    function setCallerIncentiveBps(uint256 newIncentiveBps) external onlyOwner {
 	```
 
-- Found in src/GambVault.sol [Line: 297](../src/GambVault.sol#L297)
+- Found in src/GambVault.sol [Line: 299](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L299)
 
 	```solidity
 	    function setSwapSlippageBps(uint256 newSlippageBps) external onlyOwner {
 	```
 
-- Found in src/GambVault.sol [Line: 303](../src/GambVault.sol#L303)
+- Found in src/GambVault.sol [Line: 305](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L305)
 
 	```solidity
 	    function setDepositsPaused(bool paused_) external onlyOwner {
 	```
 
-- Found in src/GambVault.sol [Line: 313](../src/GambVault.sol#L313)
+- Found in src/GambVault.sol [Line: 315](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L315)
 
 	```solidity
 	    function emergencyExitMasterChef() external onlyOwner {
 	```
 
-- Found in src/GambVault.sol [Line: 326](../src/GambVault.sol#L326)
+- Found in src/GambVault.sol [Line: 328](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L328)
 
 	```solidity
 	    function rescueToken(address token, uint256 amount, address to) external onlyOwner {
@@ -290,37 +290,37 @@ Large literal values multiples of 10000 can be replaced with scientific notation
 <details><summary>6 Found Instances</summary>
 
 
-- Found in src/GambLendingPool.sol [Line: 33](../src/GambLendingPool.sol#L33)
+- Found in src/GambLendingPool.sol [Line: 33](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L33)
 
 	```solidity
 	    uint256 public constant MAX_BPS = 10_000;
 	```
 
-- Found in src/GambLendingPool.sol [Line: 385](../src/GambLendingPool.sol#L385)
+- Found in src/GambLendingPool.sol [Line: 385](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLendingPool.sol#L385)
 
 	```solidity
 	        if (multiplierBpsPerYear > 10_000) revert RateModelOutOfRange(); // hard cap 100%/yr
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 56](../src/GambLeverageZap.sol#L56)
+- Found in src/GambLeverageZap.sol [Line: 56](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L56)
 
 	```solidity
 	    uint256 public constant MAX_BPS = 10_000;
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 63](../src/GambLeverageZap.sol#L63)
+- Found in src/GambLeverageZap.sol [Line: 63](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L63)
 
 	```solidity
 	    uint256 public constant MAX_LEVERAGE_BPS = 30_000; // 3x absolute ceiling
 	```
 
-- Found in src/GambLeverageZap.sol [Line: 72](../src/GambLeverageZap.sol#L72)
+- Found in src/GambLeverageZap.sol [Line: 72](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambLeverageZap.sol#L72)
 
 	```solidity
 	    uint256 private constant FLASH_FEE_NUM = 10_000;
 	```
 
-- Found in src/GambVault.sol [Line: 51](../src/GambVault.sol#L51)
+- Found in src/GambVault.sol [Line: 53](../../Volumes/MASS/gambiarra-finance/gambiarra-v2/contracts/src/GambVault.sol#L53)
 
 	```solidity
 	    uint256 public constant MAX_BPS = 10_000;

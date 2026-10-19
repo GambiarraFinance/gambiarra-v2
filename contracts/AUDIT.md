@@ -19,13 +19,43 @@ Relatórios brutos:
 
 ## Resumo
 
-| Ferramenta | High | Medium | Low | Info |
-| --- | --- | --- | --- | --- |
-| Aderyn | 1 (falso positivo) | 0 | 2 | — |
-| Slither | 0 | 0 | 0 | 23 |
-| Foundry | 13 testes passando, 0 falhando | | | |
+Estado **final**, depois das correções:
+
+| Ferramenta | High | Medium | Low | Info | Total |
+| --- | --- | --- | --- | --- | --- |
+| Aderyn | 1 (falso positivo) | 0 | 2 | — | 3 |
+| Slither | 0 | 15 | 8 | 0 | 23 |
+| Foundry | 13 testes passando, 0 falhando | | | | |
 
 `forge fmt --check` também passa.
+
+> Nota de leitura: a saída de console do Slither rotula os grupos como
+> `INFO:Detectors:`, que é o **nível de verbosidade** do console, não a
+> severidade. A severidade por achado está no campo `impact` do JSON
+> (`slither . --json ...`): Low 8, Medium 15, nenhum High. Os 15 Medium e os 8
+> Low são os falsos positivos triados abaixo. **Nenhum achado real resta.**
+
+## Achados confirmados e corrigidos
+
+Estas correções foram aplicadas ao código; o detalhamento e o raciocínio
+estão no README da raiz.
+
+| # | Sev | Local | Achado | Correção |
+| --- | --- | --- | --- | --- |
+| 1 | Alta | `GambLeverageZap._handleClose` | `removeLiquidity` com `amountAMin = 0` e `amountBMin = 0` — o sandwich escolhia o split GAMB/WBNB da redemption, e o swap seguinte executava contra o pool já inclinado | Mínimos não-zero derivados do split proporcional de reservas do par (`_expectedLpSplit`), com o buffer de slippage do protocolo |
+| 2 | Alta | `GambLeverageZap._handleClose` | Retorno de `lendingPool.repay()` ignorado — `repay` limita o valor ao débito, então um juro acumulado entre o snapshot e o callback deixava a posição meio fechada, em silêncio | Post-condição explícita: `currentDebt(user) != 0` ⇒ `PositionNotFullyRepaid` |
+| 3 | Média | `GambVault.harvest` | `block.timestamp` como deadline de swap — não oferece proteção contra transação atrasada | Deadline fornecido pelo caller: `harvest(minLpOut, deadline)` |
+| 4 | Média | `GambVault.harvest` | Split com `toCompound == 1` ⇒ `half == 0` ⇒ o router revertia no swap de valor zero, **brickando `harvest()` para sempre** | `toCompound < 2` retorna 0 e emite o evento; o resto fica no vault e é compilado no próximo harvest |
+| 5 | Média | `GambLendingPool.accrueInterest` | Estado mudava sem evento — indexers e agents não tinham sinal on-chain de que a dívida cresceu | Evento `InterestAccrued(borrowIndex, totalBorrows, totalReserves, interestAccumulated)` |
+| 6 | Média | `GambLendingPool.liquidate` | `seizeValueInWbnb` truncava para baixo, shaving o bônus do liquidator e deixando o protocolo short | `Math.mulDiv(..., Rounding.Ceil)` — bônus nunca truncado; o nº de shares continua arredondando **para baixo**, a favor do borrower |
+| 7 | Média | `GambLendingPool.withdrawReserves` | Limitado só pelo reserve acumulado; como o mesmo WBNB pode estar emprestado, o saldo em caixa pode ser menor e a chamada revertia | Cap duplo: pelo reserve **e** pelo WBNB em caixa |
+| 8 | Média | `rescueToken` (vault + zap) | Podia varrer o GAMB pendente (recompensa dos depositantes) e, no zap, LP/shares/WBNB/GAMB | `CannotRescueVaultAsset` / `CannotRescueProtocolAsset` |
+| 9 | Média | `GambLendingPool` (juros) | `x * rate * elapsed / 1e18` — overflow intermediário possível e precisão perdida em cada passo | `Math.mulDiv` com intermediário de 512 bits, truncando só no final |
+| 10 | Baixa | `GambTwapOracle` | Não implementava `IGambTwapOracle` | `contract GambTwapOracle is IGambTwapOracle` |
+| 11 | Baixa | `GambTwapOracle.update` | Estado mudava sem evento | Evento `PriceUpdated(priceAverageWad, blockTimestampLast)` |
+| 12 | Baixa | `GambVault._withdraw` | Parâmetro `owner` sombreava `Ownable.owner()` | Renomeado para `owner_` |
+| 13 | Baixa | `GambVault` | `error NotExited()` declarado e nunca usado | Removido |
+| 14 | Baixa | Todos | `pragma solidity ^0.8.26` (faixa aberta) | Fixado em `0.8.26`, igual ao `solc_version` do `foundry.toml` |
 
 ## Triage — Aderyn
 
@@ -75,7 +105,8 @@ para timelock antes de TVL relevante.
 
 ## Triage — Slither
 
-23 resultados, todos **INFO** (nenhum High/Medium). Categorias:
+23 resultados, nenhum High. No JSON de severidade são 15 Medium e 8 Low, mas
+todos caem em quatro categorias de falso positivo:
 
 1. **Dangerous strict equality** (`== 0`, `elapsed == 0`): comparações
    intencionais para early-return em divisão/accrual. Sem ação.
@@ -88,7 +119,9 @@ para timelock antes de TVL relevante.
    externas, todos em funções `nonReentrant`; não há estado de fundos lido
    depois do evento. Sem ação.
 4. **Block timestamp**: uso de `block.timestamp` para juros e deadlines,
-   esperado em lending. Sem ação.
+   esperado em lending. Sem ação — `deadline < block.timestamp` é justamente o
+   padrão correto de expiry, e `amount > totalReserves` nem é comparação de
+   timestamp (o detector casa por vizinhança textual).
 
 ## O que ainda falta
 

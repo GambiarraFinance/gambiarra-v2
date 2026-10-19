@@ -46,7 +46,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install
-        run: npm ci
+        # `npm ci` can fail on Linux because some optional native deps
+        # (@emnapi/*, unrs-resolver platform bindings) are recorded
+        # per-platform in the lockfile. `npm install` resolves the runner's
+        # platform correctly and still honors the committed lockfile.
+        run: npm install --no-audit --no-fund
 
       - name: Lint
         run: npm run lint
