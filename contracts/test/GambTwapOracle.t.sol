@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {GambTwapOracle} from "../src/GambTwapOracle.sol";
@@ -25,6 +25,7 @@ contract GambTwapOracleTest is Test {
     }
 
     function _warmUpTwap(uint32 elapsed) internal {
+        vm.warp(block.timestamp + elapsed);
         pair.advance(elapsed);
         oracle.update();
     }
@@ -52,13 +53,11 @@ contract GambTwapOracleTest is Test {
         _warmUpTwap(31 minutes);
         assertFalse(oracle.isStale());
 
-        // ...then let the (mock) pair's clock move forward without anyone
-        // calling update() again. isStale() reads elapsed time via the
-        // pair's own reported timestamp (exactly like production, where the
-        // real Pancake pair's blockTimestampLast tracks real time), so we
-        // advance the mock pair directly rather than vm.warp (which the mock
-        // doesn't observe on its own).
-        pair.advance(uint32(oracle.MAX_STALENESS()) + 1);
+        // ...then let the chain clock move forward without anyone calling
+        // update() again. isStale() compares the last successful update to
+        // block.timestamp, exactly like production, so we warp the EVM clock
+        // rather than only the mock pair's timestamp.
+        vm.warp(block.timestamp + oracle.MAX_STALENESS() + 1);
 
         assertTrue(oracle.isStale());
         vm.expectRevert(GambTwapOracle.OracleStale.selector);
@@ -66,9 +65,30 @@ contract GambTwapOracleTest is Test {
     }
 
     function test_revertsIfUpdatedTooSoon() public {
-        pair.advance(10 minutes); // less than MIN_PERIOD (30 min)
+        vm.warp(block.timestamp + 10 minutes); // less than MIN_PERIOD (30 min)
+        pair.advance(10 minutes);
         vm.expectRevert(GambTwapOracle.TooSoon.selector);
         oracle.update();
+    }
+
+    function test_pokeAdvancesWindowOnDormantPair() public {
+        _warmUpTwap(31 minutes);
+        assertFalse(oracle.isStale());
+
+        // The pool is dormant: nobody touches it for 3 hours, so its own
+        // timestamp also freezes and the oracle must go stale.
+        vm.warp(block.timestamp + 3 hours);
+        assertTrue(oracle.isStale());
+
+        // poke() calls sync() (zero price impact) and advances the window.
+        oracle.poke();
+        assertFalse(oracle.isStale());
+    }
+
+    function test_pokeRevertsIfWindowIsTooYoung() public {
+        _warmUpTwap(31 minutes);
+        vm.expectRevert(GambTwapOracle.TooSoon.selector);
+        oracle.poke();
     }
 
     function test_skewedReserves_sameTwapPrice_fairValueBarelyMoves() public {

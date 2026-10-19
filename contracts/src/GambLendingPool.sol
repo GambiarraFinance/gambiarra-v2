@@ -156,15 +156,27 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
 
         uint256 interestAccumulated = 0;
         if (borrowsPrior > 0 && rate > 0) {
-            // Math.mulDiv with a 512-bit intermediate: `borrowsPrior * rate *
-            // elapsed` is computed without ever overflowing, and the final
-            // division truncates exactly once (at the end) instead of at
-            // every step.
-            interestAccumulated = Math.mulDiv(Math.mulDiv(borrowsPrior, rate, WAD), elapsed, 1);
+            // The index moves first, and the aggregate debt is then scaled by
+            // the SAME ratio — so `totalBorrows` keeps tracking the sum of the
+            // index-based borrower debts instead of drifting away from it.
+            //
+            // Scaling by rate and elapsed time directly looked equivalent but
+            // was not: `borrowsPrior * rate / 1e18` truncates by up to one
+            // unit, and `elapsed` then multiplied that error — the aggregate
+            // ended up BELOW the sum of the debts, and `totalBorrows -=
+            // repaid` underflowed. repay() and liquidate() then reverted for
+            // good, leaving the debt permanently unpayable. Caught by the
+            // fork test against real interest accrual.
+            uint256 indexDelta = Math.mulDiv(Math.mulDiv(borrowIndex, rate, WAD), elapsed, 1);
+            uint256 newBorrowIndex = borrowIndex + indexDelta;
+
+            // For a borrower whose index snapshot is the current index, this
+            // is exactly their debt growth: p * indexDelta / borrowIndex.
+            interestAccumulated = Math.mulDiv(borrowsPrior, indexDelta, borrowIndex);
             uint256 reservesDelta = Math.mulDiv(interestAccumulated, reserveFactorBps, MAX_BPS);
             totalBorrows = borrowsPrior + interestAccumulated;
             totalReserves += reservesDelta;
-            borrowIndex += Math.mulDiv(Math.mulDiv(borrowIndex, rate, WAD), elapsed, 1);
+            borrowIndex = newBorrowIndex;
         }
 
         lastAccrualTimestamp = block.timestamp;
@@ -291,7 +303,7 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
 
         info.principal = debt - actualRepaid;
         info.indexSnapshot = borrowIndex;
-        totalBorrows -= actualRepaid;
+        _decreaseTotalBorrows(actualRepaid);
 
         emit Repaid(onBehalfOf, msg.sender, actualRepaid);
     }
@@ -300,6 +312,23 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
         if (vaultShares == 0) return 0;
         uint256 lpAmount = vault.convertToAssets(vaultShares);
         return oracle.fairValueOfLpInWbnb(lpAmount);
+    }
+
+    /// @dev Decrements the aggregate borrow, saturating at zero.
+    ///      `totalBorrows` is the aggregate of the index-based borrower debts,
+    ///      and the two can differ by a few wei: the per-borrower debt is
+    ///      `p * I / I_i` and the aggregate is scaled by the index, so each
+    ///      truncation rounds slightly differently. That is dust — but a
+    ///      reverting subtraction turns dust into an UNPAYABLE debt, which is
+    ///      how `repay()` and `liquidate()` used to brick themselves after
+    ///      the first interest accrual. A borrower must always be able to
+    ///      repay; if the aggregate is a wei short, it goes to zero.
+    function _decreaseTotalBorrows(uint256 amount) internal {
+        if (amount >= totalBorrows) {
+            totalBorrows = 0;
+        } else {
+            totalBorrows -= amount;
+        }
     }
 
     /// @notice 1e18-scaled health factor: >=1e18 is safe, <1e18 is liquidatable.
@@ -331,7 +360,7 @@ contract GambLendingPool is Ownable2Step, ReentrancyGuard {
 
         info.principal = debt - actualRepaid;
         info.indexSnapshot = borrowIndex;
-        totalBorrows -= actualRepaid;
+        _decreaseTotalBorrows(actualRepaid);
 
         uint256 collateralValue = _collateralValueInWbnb(info.collateralShares);
         // Round the seizure value UP (Math.Rounding.Ceil): the liquidation

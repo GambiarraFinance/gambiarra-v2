@@ -37,6 +37,8 @@ interface IGambMasterChef {
 
     function gamb() external view returns (address);
 
+    function owner() external view returns (address);
+
     /// @notice Deposit `amount` of the pool's LP token. Depositing 0 just harvests
     ///         pending GAMB to msg.sender (standard MasterChef pattern).
     function deposit(uint256 pid, uint256 amount) external;

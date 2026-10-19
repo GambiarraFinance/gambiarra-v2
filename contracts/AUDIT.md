@@ -25,7 +25,7 @@ Estado **final**, depois das correções:
 | --- | --- | --- | --- | --- | --- |
 | Aderyn | 1 (falso positivo) | 0 | 2 | — | 3 |
 | Slither | 0 | 15 | 8 | 0 | 23 |
-| Foundry | 13 testes passando, 0 falhando | | | | |
+| Foundry | 17 unitários + 16 fork tests, 0 falhando | | | | |
 
 `forge fmt --check` também passa.
 

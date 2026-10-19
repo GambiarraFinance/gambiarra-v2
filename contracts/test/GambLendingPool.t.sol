@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {GambLendingPool} from "../src/GambLendingPool.sol";
@@ -154,6 +154,48 @@ contract GambLendingPoolTest is Test {
 
         assertGt(pool.currentDebt(bob), 40e18, "debt must grow with interest");
         assertGt(pool.totalReserves(), 0, "protocol must book reserves");
+    }
+
+    function test_repayFullDebtAfterAccrualDoesNotUnderflow() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.borrow(40e18, bob, bob);
+
+        vm.warp(block.timestamp + 30 days);
+        pool.accrueInterest();
+
+        uint256 debt = pool.currentDebt(bob);
+        vm.prank(bob);
+        uint256 repaid = pool.repay(debt, bob);
+
+        assertEq(repaid, debt, "full debt must be repaid");
+        assertEq(pool.currentDebt(bob), 0, "borrower must be debt-free");
+        assertEq(pool.totalBorrows(), 0, "global borrows must not underflow");
+    }
+
+    function test_liquidateFullDebtAfterAccrualDoesNotUnderflow() public {
+        _supply(alice, 1_000e18);
+        vault.mintShares(bob, 100e18);
+        _collateralize(bob, 100e18);
+
+        vm.prank(bob);
+        pool.borrow(40e18, bob, bob);
+
+        vm.warp(block.timestamp + 30 days);
+        pool.accrueInterest();
+
+        oracle.setPriceWad(0.1e18); // deeply underwater
+        uint256 debt = pool.currentDebt(bob);
+
+        vm.prank(liquidator);
+        (uint256 repaid,) = pool.liquidate(bob, debt);
+
+        assertEq(repaid, debt);
+        assertEq(pool.currentDebt(bob), 0);
+        assertEq(pool.totalBorrows(), 0);
     }
 
     function test_liquidateUndercollateralizedPosition() public {

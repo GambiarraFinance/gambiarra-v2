@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.26;
 
 import {IPancakeFlashPair} from "../../src/interfaces/IPancakeFlashPair.sol";
 
@@ -60,5 +60,19 @@ contract MockFlashPair is IPancakeFlashPair {
         price0CumulativeLast += (uint256(reserve1) * Q112 / reserve0) * timeElapsed;
         price1CumulativeLast += (uint256(reserve0) * Q112 / reserve1) * timeElapsed;
         blockTimestampLast += timeElapsed;
+    }
+
+    /// @dev Mirrors the real pair's `sync()`: advances the accumulator by the
+    ///      current price over the elapsed time and stamps the pair's
+    ///      timestamp with now — no trade, no price impact.
+    function sync() external {
+        uint256 Q112 = 2 ** 112;
+        uint32 blockTimestamp = uint32(block.timestamp);
+        uint32 timeElapsed = blockTimestamp - blockTimestampLast;
+        if (timeElapsed > 0 && reserve0 != 0 && reserve1 != 0) {
+            price0CumulativeLast += (uint256(reserve1) * Q112 / reserve0) * timeElapsed;
+            price1CumulativeLast += (uint256(reserve0) * Q112 / reserve1) * timeElapsed;
+        }
+        blockTimestampLast = blockTimestamp;
     }
 }

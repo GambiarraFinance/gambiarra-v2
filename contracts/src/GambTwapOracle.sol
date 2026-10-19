@@ -2,7 +2,7 @@
 pragma solidity 0.8.26;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IPancakeFlashPair} from "./interfaces/IPancakeFlashPair.sol";
+import {IPancakePair} from "./interfaces/IPancakePair.sol";
 import {IGambTwapOracle} from "./interfaces/IGambTwapOracle.sol";
 
 /// @title GambTwapOracle
@@ -26,7 +26,7 @@ contract GambTwapOracle is IGambTwapOracle {
     uint256 public constant WAD = 1e18;
     uint256 private constant Q112 = 2 ** 112;
 
-    IPancakeFlashPair public immutable pair;
+    IPancakePair public immutable pair;
     address public immutable gamb;
     address public immutable wbnb;
     bool public immutable gambIsToken0;
@@ -44,7 +44,7 @@ contract GambTwapOracle is IGambTwapOracle {
     ///         indexers and agents had no way to know the TWAP window moved.
     event PriceUpdated(uint256 priceAverageWad, uint32 blockTimestampLast);
 
-    constructor(IPancakeFlashPair pair_, address gamb_, address wbnb_) {
+    constructor(IPancakePair pair_, address gamb_, address wbnb_) {
         bool isToken0 = pair_.token0() == gamb_;
         if (!isToken0 && pair_.token1() != gamb_) revert PairAssetMismatch();
         if (isToken0 && pair_.token1() != wbnb_) revert PairAssetMismatch();
@@ -63,6 +63,28 @@ contract GambTwapOracle is IGambTwapOracle {
     /// @notice Advances the TWAP window. Permissionless on purpose — this is
     ///         meant to be called by keeper bots / agents, not an admin.
     function update() external {
+        _update();
+    }
+
+    /// @notice Permissionless keeper entry point: refresh the TWAP window on a
+    ///         pair nobody trades.
+    /// @dev A Uniswap/Pancake V2 style pair only advances its price
+    ///      accumulator and `blockTimestampLast` when it is *touched* — by a
+    ///      trade, a mint, a burn or a `sync()`. The GAMB/WBNB pool is
+    ///      dormant (measured 54h+ between touches), so without a poke the
+    ///      window can never move: `update()` would keep reverting with
+    ///      `TooSoon` and the price would stay stale forever, which blocks
+    ///      every collateral valuation and therefore every borrow.
+    ///      `sync()` advances the accumulator and the pair's timestamp with
+    ///      ZERO price impact — it is not a trade.
+    ///      Call it at most once per `MIN_PERIOD`; it reverts with `TooSoon`
+    ///      when the window is not old enough yet.
+    function poke() external {
+        pair.sync();
+        _update();
+    }
+
+    function _update() internal {
         uint256 priceCumulative = gambIsToken0 ? pair.price0CumulativeLast() : pair.price1CumulativeLast();
         (,, uint32 blockTimestamp) = pair.getReserves();
 
@@ -86,10 +108,17 @@ contract GambTwapOracle is IGambTwapOracle {
         emit PriceUpdated(priceAverageWad, blockTimestamp);
     }
 
+    /// @notice Whether the recorded TWAP is too old to be trusted.
+    /// @dev Measured against the CHAIN clock, not the pair's. The pair's
+    ///      `blockTimestampLast` only moves when the pair is touched, so on a
+    ///      dormant pool it would stay frozen and the oracle would happily
+    ///      serve a price of any age — the exact opposite of the fail-closed
+    ///      contract this oracle promises. `blockTimestampLast` is the pair's
+    ///      timestamp as of the last successful `update()`, so comparing it to
+    ///      `block.timestamp` measures how long ago that update really was.
     function isStale() public view returns (bool) {
-        (,, uint32 currentTs) = pair.getReserves();
         unchecked {
-            return (currentTs - blockTimestampLast) > MAX_STALENESS;
+            return (block.timestamp - blockTimestampLast) > MAX_STALENESS;
         }
     }
 
