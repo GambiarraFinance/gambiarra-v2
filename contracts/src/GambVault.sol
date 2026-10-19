@@ -27,9 +27,11 @@ import {IPancakeRouter02} from "./interfaces/IPancakeRouter02.sol";
 ///        and can never be silently changed by this vault's owner.
 ///      - GAMB's own mint authority is the MasterChef itself; this vault never
 ///        mints GAMB, it only harvests and recompounds what the MasterChef pays out.
-///      - As of the audit, real TVL in the target pool was tiny (~9 LP tokens),
-///        so this vault uses OZ's ERC4626 decimals-offset virtual-shares guard
-///        against first-depositor share-price inflation attacks.
+///      - The GAMB/WBNB pair is dormant and thin on the WBNB side (~0.24 WBNB
+///        of reserve, ~15.5k LP tokens in existence, no stake/unstake activity
+///        in recent blocks), so this vault uses OZ's ERC4626 decimals-offset
+///        virtual-shares guard against first-depositor share-price inflation
+///        attacks.
 contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -121,9 +123,9 @@ contract GambVault is ERC4626, Ownable2Step, ReentrancyGuard {
     // ---------------------------------------------------------------------
 
     /// @dev Virtual shares/assets offset (OZ ERC4626 inflation-attack guard).
-    ///      Non-zero on purpose: the target pool had ~9 LP tokens of real TVL
-    ///      at audit time, so a first-depositor donation attack is cheap to
-    ///      attempt without this.
+    ///      Non-zero on purpose: the target pair is thin on the WBNB side
+    ///      (~0.24 WBNB of reserve), so a first-depositor donation attack is
+    ///      cheap to attempt without this.
     function _decimalsOffset() internal pure override returns (uint8) {
         return 6;
     }

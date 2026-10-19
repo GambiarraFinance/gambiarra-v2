@@ -202,6 +202,17 @@ forge test -vvv
 forge fmt --check
 ```
 
+Auditoria estática (Aderyn e Slither instalados localmente):
+
+```bash
+cd contracts
+aderyn -o audit/aderyn-report.md
+slither . --filter-paths "lib|test" --compile-force-framework foundry \
+  > audit/slither-report.txt
+```
+
+O triage dos achados está em [`contracts/AUDIT.md`](contracts/AUDIT.md).
+
 As dependências (`forge-std` e OpenZeppelin) estão vendorizadas em
 `contracts/lib/`, então o build é reproduzível sem submodules.
 
