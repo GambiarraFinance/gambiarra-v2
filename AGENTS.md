@@ -21,17 +21,21 @@
 contracts/
   src/                 contratos v2 (GambVault, GambTwapOracle, GambLendingPool, GambLeverageZap)
   src/interfaces/      interfaces mínimas (inclui IGambMasterChef)
+  script/              Deploy.s.sol + DeployLib.sol (endereços verificados, wiring)
   test/                Foundry tests + mocks
   test/GambLegacy.fork.t.sol  invariantes do legado contra fork da BSC
+  test/GambV2.fork.t.sol      a v2 ponta a ponta contra a BSC real
+  test/mocks/          MockMasterChef, MockRouter, MockVault, MockOracle, MockFlashPair
   audit/               relatórios Aderyn/Slither
-  AUDIT.md             triage dos findings
-  Makefile             build/test/fmt/fork/fork-test
+  AUDIT.md             triage dos findings (estáticos + do fork)
+  Makefile             build/test/fmt/fork/fork-test/fork-test-v2
 web/
   src/app/             App Router: landing, /dashboard, /llms.txt, /agents.json, /api/stats
   src/components/      HeroScene (Three.js), WalletPanel (viem)
   src/lib/protocol.ts  endereços, RPC, leitura do MasterChef via viem, contratos, endpoints
   src/lib/format.ts    formatação numérica pt-BR baseada em bigint
   src/lib/wallet?      (não existe: a lógica de wallet vive em WalletPanel)
+.opencode/skills/project-docs/  doutrina de documentação do projeto
 .github/workflows/ci.yml  Foundry + Next
 ```
 
@@ -45,7 +49,12 @@ forge test -vvv
 forge fmt --check
 make fork        # anvil --fork-url $BSC_RPC_URL --chain-id 56
 make fork-test   # invariantes do MasterChef legado (precisa de BSC_RPC_URL)
+make fork-test-v2  # a v2 inteira contra a BSC real
 ```
+
+> Os fork tests fixam o bloco, então exigem um RPC **archive** — os
+> `bsc-dataseed` públicos são podados e respondem "missing trie node" para
+> estado histórico. `https://bsc-mainnet.public.blastapi.io` funciona.
 
 Web (em `web/`):
 
@@ -78,6 +87,15 @@ mas não é o package manager do CI.
 9. **Nada de `delegatecall`, proxies ou upgradeability** na camada v2.
 10. **Não edite `contracts/lib/`** (forge-std + OpenZeppelin vendorizados) nem o
     contrato legado. Se precisar de uma interface nova, crie em `src/interfaces/`.
+11. **O par GAMB/WBNB é PancakeSwap V1.** A factory dele é
+    `0xBCfCcbde45cE874adCB698cC183deBcF17952812` e a factory V2 devolve
+    `address(0)` para (WBNB, GAMB) — rotear pelo Router V2 reverte em todo
+    `addLiquidity`. O deploy usa o V1 Router02 `0x05fF2B0D…`
+    (`contracts/script/DeployLib.sol`). Fato permanente: a factory do par é
+    imutável.
+12. **O oráculo TWAP precisa de keeper.** O par está dormente, então a janela só
+    anda com `GambTwapOracle.poke()` — sem impacto de preço, mas alguém tem que
+    chamar. Sem isso o lending pool para de emprestar.
 
 Antes de considerar uma mudança de contrato pronta:
 
@@ -187,3 +205,6 @@ git commit -m "tipo(escopo): descrição"
 - `web/README.md` — rotas, env e fork.
 - `SECURITY.md` — política de disclosure.
 - `agents/README.md` — índice do material para agentes.
+- `.opencode/skills/project-docs/SKILL.md` — doutrina de documentação: como
+  verificar um fato, invariante vs. snapshot, e o formato de uma entrada de
+  achado. Use ao escrever ou revisar qualquer doc do projeto.

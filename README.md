@@ -112,6 +112,55 @@ Já implementado e coberto por testes:
   slippage.
 - `GambLeverageZap` deriva o teto de alavancagem do `maxLtvBps()` do pool.
 
+### Descobertas do fork contra a BSC real
+
+O que só aparece rodando os contratos contra a mainnet. Nenhuma análise estática e
+nenhum mock pega isso — a suíte é `contracts/test/GambV2.fork.t.sol` (bloco pinado
+128620982).
+
+**1. O par GAMB/WBNB é PancakeSwap V1, não V2.** A factory do par é
+`0xBCfCcbde45cE874adCB698cC183deBcF17952812` (o PancakeSwap original, abril/2021) e o
+seu `INIT_CODE_PAIR_HASH()` é `0xd0d4c4cd…`. A factory do **V2**
+(`0xcA143Ce3…`) devolve `address(0)` para (WBNB, GAMB) — ou seja, rotear este LP pelo
+Router V2 (`0x10ED43C7…`) **reverte em todo `addLiquidity`**. O router correto é o
+**V1** Router02 `0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F`. Os quatro seletores que o
+`IPancakeRouter02` exige existem nele: a interface estava certa, a **configuração de
+deploy** é que estava errada. O par de flash do zap é deliberadamente do V2
+(`0x58F876857a02D6762E0101bb5C46A8c1ED44Dc16`, WBNB/BUSD) porque a fee de 0,25% dele é
+a que o zap assume — a venue do flash é independente da venue do LP.
+
+**2. Bug crítico no `repay()` e no `liquidate()`: revertiam para sempre depois de
+qualquer accrual.** O `accrueInterest` crescia `totalBorrows` por `rate × elapsed`,
+truncando `borrowsPrior * rate / 1e18` em até 1 unidade — e o `elapsed` multiplicava
+esse erro (2.462.400 wei após 30 dias). Mas a dívida de cada borrower cresce pelo
+**índice** (`p * I / I_i`), então o total ficava *abaixo* da soma das dívidas e
+`totalBorrows -= repaid` dava underflow. A dívida virava impagável. Corrigido: o
+índice move primeiro e o agregado é escalado pelo mesmo ratio, e a subtração ficou
+saturante. Regressão: `test_repayFullDebtAfterAccrualDoesNotUnderflow` e
+`test_liquidateFullDebtAfterAccrualDoesNotUnderflow`.
+
+**3. O oráculo TWAP nascia travado.** O par está dormente (54h38m sem ser tocado), e
+num par V2 o acumulador de preço e o timestamp só andam quando o par é **tocado**.
+Então `update()` revertia `TooSoon` para sempre e o lending pool nunca emprestaria.
+Resolvido com `GambTwapOracle.poke()` — permissionless, chama `pair.sync()` (que
+avança o acumulador **sem impacto de preço**, não é trade) e atualiza. Um keeper tem
+que dar poke a cada 30–120 min.
+
+**4. `isStale()` media o tempo errado.** Mediava contra o relógio do *par*, que fica
+congelado num par dormente — o oráculo servia um preço de qualquer idade como
+fresco, o oposto do contrato fail-closed que ele promete. Agora compara com
+`block.timestamp`.
+
+**5. Multicall3 não resolve o UX na BSC.** Ele roda as inner calls de `aggregate` com
+o **próprio Multicall** como `msg.sender`, então nada que dependa da identidade do
+usuário pode ser agregado: allowance de token, aprovação de operator, abertura de
+posição. Com `delegatecall` a allowance iria para o storage do Multicall; com `call` o
+Multicall giveaway a própria allowance. Os dois falham. O caminho para uma transação
+só é **autorização por assinatura (EIP-712)** — não agregação. (O LP tem EIP-2612;
+WBNB não tem, então a aprovação de WBNB continua sendo uma transação.)
+
+**6. A fee real do par V1 é 20 bps (0,2%)**, medida no pool vivo, não presumida.
+
 ### Auditoria estática — Slither + Aderyn
 
 As duas ferramentas rodam contra `contracts/src` (Slither 0.11.3, 100 detectors;

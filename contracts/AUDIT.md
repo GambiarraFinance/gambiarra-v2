@@ -57,6 +57,26 @@ estão no README da raiz.
 | 13 | Baixa | `GambVault` | `error NotExited()` declarado e nunca usado | Removido |
 | 14 | Baixa | Todos | `pragma solidity ^0.8.26` (faixa aberta) | Fixado em `0.8.26`, igual ao `solc_version` do `foundry.toml` |
 
+## Achados do fork contra a BSC real
+
+A análise estática não alcança o que só aparece rodando os contratos contra a
+mainnet. A suíte é `test/GambV2.fork.t.sol` (bloco pinado 128620982, `make
+fork-test-v2`).
+
+| # | Sev | Local | Achado | Correção |
+| --- | --- | --- | --- | --- |
+| F1 | **Bloqueante** | configuração de deploy | O par GAMB/WBNB é um par **PancakeSwap V1** (factory `0xBCfCcbde…`, `INIT_CODE_PAIR_HASH` `0xd0d4c4cd…`). A factory V2 devolve `address(0)` para (WBNB, GAMB), então rotear pelo Router V2 (`0x10ED43C7…`) **reverte em todo `addLiquidity`/`removeLiquidity`/swap** | Router V1 Router02 `0x05fF2B0D…`, com os quatro seletores do `IPancakeRouter02` verificados no bytecode. Endereços centralizados em `script/DeployLib.sol` (`LegacyAddresses`) |
+| F2 | **Crítica** | `GambLendingPool.repay` / `.liquidate` | Revertiam com `panic 0x11` após qualquer accrual — a dívida ficava **impagável**. `totalBorrows` crescia por `rate × elapsed` (truncando `borrowsPrior * rate / 1e18` em até 1 unidade, e o `elapsed` multiplicava o erro: 2.462.400 wei após 30 dias), enquanto a dívida real cresce pelo índice `p * I / I_i` — o total ficava abaixo da soma das dívidas | O índice move primeiro e o agregado é escalado pelo mesmo ratio (`interestAccumulated = mulDiv(borrowsPrior, indexDelta, borrowIndex)`); a subtração virou saturante (`_decreaseTotalBorrows`). Regressão: `test_repayFullDebtAfterAccrualDoesNotUnderflow`, `test_liquidateFullDebtAfterAccrualDoesNotUnderflow` |
+| F3 | **Alta** | `GambTwapOracle` | Cold-start: o par está dormente (54h38m sem toque) e num par V2 o acumulador só anda quando o par é tocado — `update()` revertia `TooSoon` para sempre e o lending pool nunca emprestaria | `poke()` permissionless: `pair.sync()` (avança o acumulador **sem impacto de preço**) e atualiza. Regressão: `test_fork_oracleStartsStaleBecauseThePairIsDormant` |
+| F4 | Média | `GambTwapOracle.isStale` | Mediava a staleness contra o relógio do **par**, congelado num par dormente — servia preço de qualquer idade como fresco, o oposto do fail-closed prometido | Compara com `block.timestamp` |
+| F5 | Média | Multicall3 (plataforma) | Na BSC o `aggregate` roda as inner calls com o **próprio Multicall** como `msg.sender`: allowance, aprovação de operator e abertura de posição não podem ser agregadas em nome do usuário | Não é corrigível no contrato — o caminho para 1 transação é autorização por assinatura (EIP-712). Regressão: `test_fork_multicallCannotOpenAPositionOnTheUsersBehalf` |
+| F6 | Info | par GAMB/WBNB | A fee real de swap é **20 bps (0,2%)**, não 25 — medida no pool vivo, não presumida | O slippage default de 1,5% do vault cobre com folga. Regressão: `test_fork_gambWbnbPairSwapFeeIsWithinTheAssumedTolerance` |
+
+> **Por que o F2 só apareceu no fork:** é um drift de truncamento entre duas
+> fórmulas matematicamente idênticas. Nenhum analisador estático compara as duas,
+> e um teste com mocks e números redondos (1e18, 30 dias) produz truncamentos
+> simétricos e esconde o erro. O fork usa os juros reais do MasterChef legado.
+
 ## Triage — Aderyn
 
 ### H-1: Reentrancy — state change after external call (falso positivo)
@@ -127,11 +147,15 @@ todos caem em quatro categorias de falso positivo:
 
 - Auditoria humana independente (contratada ou via bug bounty).
 - Testes unitários de `GambVault` e `GambLeverageZap` com mocks de MasterChef,
-  router e flash pair.
-- Fork tests contra o estado real da BSC (pool 16/25, reserves reais).
+  router e flash pair. (O `GambVault` e o `GambLeverageZap` **estão** cobertos pelo
+  fork test end-to-end, contra o MasterChef e o par reais — mas não por mocks.)
 - Fuzzing/invariant testing dos invariantes de solvência do lending pool.
 - Revisão econômica: liquidez do par, profundidade para liquidar posições,
   comportamento do TWAP em volatilidade real.
+- Autorização por assinatura (EIP-712) no lending pool e no zap, para colapsar
+  o fluxo de abertura em uma transação — ver F5.
+- Um keeper de `poke()` rodando, ou o lending pool fica sem preço utilizável
+  (ver F3).
 
 ## Reproduzindo
 
