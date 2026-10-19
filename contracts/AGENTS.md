@@ -59,7 +59,9 @@ dele é a que o zap assume.
     (`LegacyAddresses`).
 12. **O oráculo precisa de keeper.** O par está dormente, então a janela TWAP só
     anda com `GambTwapOracle.poke()`. Sem um keeper dando poke a cada 30–120 min,
-    o preço envelhece e o lending pool para de emprestar.
+    o preço envelhece e o lending pool para de emprestar. O keeper permissionless
+    está em `script/Keeper.s.sol` (`make keeper`) e também chama
+    `GambVault.harvest()`; ambos são best-effort (um `TooSoon` é no-op).
 
 ## Testes
 
@@ -70,6 +72,7 @@ forge test -vvv
 forge test --match-contract GambLegacyForkTest -vvv   # precisa de BSC_RPC_URL
 make fork-test     # invariantes do legado
 make fork-test-v2  # a v2 inteira contra a BSC real
+make keeper        # poke() no oráculo + harvest() do vault (permissionless)
 ```
 
 > Os fork tests fixam o bloco, então precisam de um RPC **archive**. Os

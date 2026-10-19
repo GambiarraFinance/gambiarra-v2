@@ -221,10 +221,12 @@ mainnet com TVL relevante, timelock no owner é a evolução natural deste desig
 
 Ainda **não** coberto / pendente:
 
-- Auditoria externa independente.
-- Testes unitários do `GambVault` e do `GambLeverageZap` (dependem de mocks de
-  MasterChef/router/flash pair).
-- Fork tests contra o estado real da BSC.
+- Auditoria externa independente (é o que bloqueia mainnet).
+- Operação do keeper: o script existe (`make keeper`), mas ainda não há um
+  cron/systemd rodando `poke()` + `harvest()` de verdade.
+- Timelock no owner antes de TVL relevante.
+- Deploy em testnet e, depois da auditoria, em mainnet com caps conservadores.
+- Testes automatizados do `web` (`format.ts` / `protocol.ts`).
 - Definição de facilitator/stablecoin para x402.
 
 Veja [`contracts/AUDIT.md`](contracts/AUDIT.md) para os relatórios de Aderyn e
@@ -269,8 +271,10 @@ cd contracts
 forge build
 forge test -vvv
 forge fmt --check
-make fork        # Anvil com fork da BSC (chain id 56), em outro terminal
-make fork-test   # invariantes do legado contra a BSC real (precisa de BSC_RPC_URL)
+make fork          # Anvil com fork da BSC (chain id 56), em outro terminal
+make fork-test     # invariantes do legado contra a BSC real (precisa de BSC_RPC_URL)
+make fork-test-v2  # a v2 ponta a ponta contra a BSC real (precisa de RPC archive)
+make keeper        # poke() no oráculo + harvest() do vault (ORACLE_ADDRESS, KEEPER_PRIVATE_KEY)
 ```
 
 Auditoria estática (Aderyn e Slither instalados localmente):
@@ -323,9 +327,11 @@ Variáveis de ambiente (todas opcionais):
 ## Roadmap
 
 - [ ] Auditoria externa dos quatro contratos.
-- [ ] Testes unitários de `GambVault` e `GambLeverageZap` com mocks (hoje a
-      cobertura deles vem dos fork tests).
+- [x] Testes unitários de `GambVault` (15) e `GambLeverageZap` (12) com mocks.
 - [x] Fork tests contra a BSC mainnet (`GambLegacy` + `GambV2`, gated por `BSC_RPC_URL`).
+- [x] Keeper permissionless (`script/Keeper.s.sol` + `make keeper`).
+- [ ] Operar o keeper em produção (cron/systemd a cada 30–120 min).
+- [ ] Timelock no owner.
 - [ ] Deploy em testnet + dashboard lendo endereços reais.
 - [ ] x402 na BSC para rotas premium — **somente após** confirmar facilitator,
       stablecoin e contrato de pagamento.
