@@ -160,10 +160,12 @@ todos caem em quatro categorias de falso positivo:
 ## O que ainda falta
 
 - Auditoria humana independente (contratada ou via bug bounty).
-- Testes unitários de `GambVault` e `GambLeverageZap` com mocks de MasterChef,
-  router e flash pair. (O `GambVault` e o `GambLeverageZap` **estão** cobertos pelo
-  fork test end-to-end, contra o MasterChef e o par reais — mas não por mocks.)
-- Fuzzing/invariant testing dos invariantes de solvência do lending pool.
+- Testes unitários de `GambLeverageZap` com mocks de MasterChef, router e
+  flash pair. (O `GambLeverageZap` **está** coberto pelo fork test end-to-end,
+  contra o MasterChef e o par reais — mas não por mocks. O `GambVault` tem
+  agora os dois: `test/GambVault.t.sol` e o fork test.)
+- Invariant testing do **zap** e do **vault** (o lending pool já tem:
+  `test/GambLendingPoolInvariant.t.sol`, 4 invariantes, 128k chamadas).
 - Revisão econômica: liquidez do par, profundidade para liquidar posições,
   comportamento do TWAP em volatilidade real.
 - Autorização por assinatura (EIP-712) no lending pool e no zap, para colapsar
