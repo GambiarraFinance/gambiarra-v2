@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Gambiarra Finance — web
 
-## Getting Started
+Landing page, dashboard e endpoints agent-first do Gambiarra Finance v2.
 
-First, run the development server:
+Stack: **Next.js 16** (App Router, Cache Components) · **React 19** · **Tailwind CSS 4** · **Three.js** (hero 3D).
+
+## Rodando
 
 ```bash
+npm ci
+cp .env.example .env.local   # opcional
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Produção:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build
+npm run lint
+npm start
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Estrutura
 
-## Learn More
+| Caminho | O que é |
+| --- | --- |
+| `src/app/page.tsx` | Landing (hero 3D, legado, stack, agentes, segurança) |
+| `src/app/dashboard/page.tsx` | Estado on-chain do MasterChef legado |
+| `src/app/llms.txt/route.ts` | Contexto em texto puro para LLMs |
+| `src/app/agents.json/route.ts` | Manifesto legível por máquina |
+| `src/app/api/stats/route.ts` | Estado on-chain em JSON |
+| `src/app/sitemap.ts` / `robots.ts` | SEO |
+| `src/app/opengraph-image.tsx` | Imagem OG gerada dinamicamente |
+| `src/components/HeroScene.tsx` | Chinelo 3D em Three.js (com fallback SVG) |
+| `src/lib/protocol.ts` | Endereços, constantes e leitura via RPC |
 
-To learn more about Next.js, take a look at the following resources:
+## Leitura on-chain
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`src/lib/protocol.ts` lê o MasterChef legado direto por JSON-RPC público, sem
+indexer e sem API key. Se todos os RPCs falharem, a página degrada para um
+snapshot auditado em vez de mostrar zeros.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Configuração opcional: `NEXT_PUBLIC_SITE_URL` e `BSC_RPC_URL` (veja
+`.env.example`).
 
-## Deploy on Vercel
+## Endpoints
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `/llms.txt` — `text/plain`
+- `/agents.json` — `application/json`
+- `/api/stats` — `application/json`
+- `/dashboard` — `text/html`
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Documentação completa do projeto: [`../README.md`](../README.md).
